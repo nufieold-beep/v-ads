@@ -1,0 +1,586 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>LiteAds – Dashboard</title>
+<style>
+  :root {
+    --bg: #0f1117;
+    --surface: #1a1d27;
+    --surface-hover: #22263a;
+    --border: #2a2e3d;
+    --accent: #6c5ce7;
+    --accent-light: #a29bfe;
+    --green: #00b894;
+    --green-dim: rgba(0,184,148,.15);
+    --red: #ff6b6b;
+    --red-dim: rgba(255,107,107,.15);
+    --yellow: #ffeaa7;
+    --yellow-dim: rgba(255,234,167,.12);
+    --text: #e2e8f0;
+    --text-dim: #8892a4;
+    --radius: 12px;
+  }
+  * { margin:0; padding:0; box-sizing:border-box; }
+  body {
+    font-family: 'Segoe UI', system-ui, -apple-system, sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    min-height: 100vh;
+  }
+
+  /* ── Header ────────────────────────────────────────────── */
+  header {
+    background: linear-gradient(135deg, #1a1d27 0%, #22263a 100%);
+    border-bottom: 1px solid var(--border);
+    padding: 24px 32px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    flex-wrap: wrap;
+    gap: 16px;
+  }
+  .logo {
+    display: flex;
+    align-items: center;
+    gap: 14px;
+  }
+  .logo-icon {
+    width: 42px; height: 42px;
+    background: var(--accent);
+    border-radius: 10px;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 20px; font-weight: 700; color: #fff;
+  }
+  .logo h1 { font-size: 22px; font-weight: 700; letter-spacing: -.3px; }
+  .logo p { font-size: 12px; color: var(--text-dim); margin-top: 2px; }
+  .header-badges { display: flex; gap: 8px; flex-wrap: wrap; }
+  .badge {
+    font-size: 11px; font-weight: 600; padding: 4px 10px;
+    border-radius: 20px; text-transform: uppercase; letter-spacing: .5px;
+  }
+  .badge-purple { background: rgba(108,92,231,.2); color: var(--accent-light); }
+  .badge-green  { background: var(--green-dim); color: var(--green); }
+
+  /* ── Main ──────────────────────────────────────────────── */
+  main { max-width: 1320px; margin: 0 auto; padding: 28px 24px 48px; }
+
+  /* ── Status Bar ────────────────────────────────────────── */
+  .status-bar {
+    display: flex; gap: 12px; margin-bottom: 28px; flex-wrap: wrap;
+  }
+  .status-card {
+    flex: 1; min-width: 180px;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 18px 20px;
+    display: flex; align-items: center; gap: 14px;
+    transition: border-color .2s;
+  }
+  .status-card:hover { border-color: var(--accent); }
+  .status-dot {
+    width: 12px; height: 12px; border-radius: 50%;
+    flex-shrink: 0; position: relative;
+  }
+  .status-dot::after {
+    content: ''; position: absolute; inset: -4px;
+    border-radius: 50%; animation: pulse 2s infinite;
+  }
+  .dot-green  { background: var(--green); }
+  .dot-green::after { background: rgba(0,184,148,.3); }
+  .dot-yellow { background: #fdcb6e; }
+  .dot-yellow::after { background: rgba(253,203,110,.25); }
+  .dot-red    { background: var(--red); }
+  .dot-red::after { background: rgba(255,107,107,.25); }
+  @keyframes pulse {
+    0%,100% { opacity:1; transform:scale(1); }
+    50%     { opacity:0; transform:scale(1.8); }
+  }
+  .status-label { font-size: 12px; color: var(--text-dim); }
+  .status-value { font-size: 15px; font-weight: 600; margin-top: 2px; }
+
+  /* ── Section titles ────────────────────────────────────── */
+  .section-title {
+    font-size: 13px; font-weight: 700; text-transform: uppercase;
+    letter-spacing: 1px; color: var(--text-dim);
+    margin: 32px 0 14px; padding-left: 4px;
+  }
+  .section-title:first-of-type { margin-top: 0; }
+
+  /* ── Service grid ──────────────────────────────────────── */
+  .grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+    gap: 14px;
+  }
+  .card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 20px;
+    transition: border-color .2s, transform .15s;
+    cursor: default;
+    position: relative;
+    overflow: hidden;
+  }
+  .card:hover {
+    border-color: var(--accent);
+    transform: translateY(-2px);
+  }
+  .card-head {
+    display: flex; align-items: center; justify-content: space-between;
+    margin-bottom: 10px;
+  }
+  .card-name {
+    font-size: 15px; font-weight: 600;
+    display: flex; align-items: center; gap: 8px;
+  }
+  .card-method {
+    font-size: 10px; font-weight: 700; padding: 2px 7px;
+    border-radius: 4px; letter-spacing: .5px;
+  }
+  .m-get    { background: rgba(0,184,148,.15); color: var(--green); }
+  .m-post   { background: rgba(108,92,231,.2); color: var(--accent-light); }
+  .m-ui     { background: rgba(253,203,110,.15); color: #fdcb6e; }
+  .m-tcp    { background: rgba(255,107,107,.12); color: #ff7979; }
+
+  .card-url {
+    display: flex; align-items: center; gap: 8px;
+    background: rgba(0,0,0,.25);
+    border-radius: 8px;
+    padding: 10px 14px;
+    font-family: 'Cascadia Code', 'Fira Code', 'Consolas', monospace;
+    font-size: 13px;
+    color: var(--accent-light);
+    word-break: break-all;
+    margin-bottom: 10px;
+  }
+  .card-url a {
+    color: inherit; text-decoration: none; flex: 1;
+  }
+  .card-url a:hover { text-decoration: underline; }
+  .copy-btn {
+    background: none; border: none; cursor: pointer;
+    color: var(--text-dim); padding: 4px; border-radius: 4px;
+    transition: color .2s, background .2s; flex-shrink: 0;
+  }
+  .copy-btn:hover { color: var(--text); background: rgba(255,255,255,.08); }
+  .copy-btn.copied { color: var(--green); }
+
+  .card-desc {
+    font-size: 12px; color: var(--text-dim); line-height: 1.5;
+  }
+  .card-desc code {
+    background: rgba(108,92,231,.12); color: var(--accent-light);
+    padding: 1px 5px; border-radius: 4px; font-size: 11px;
+  }
+
+  /* ── Footer ────────────────────────────────────────────── */
+  footer {
+    text-align: center; padding: 24px;
+    font-size: 12px; color: var(--text-dim);
+    border-top: 1px solid var(--border);
+    margin-top: 40px;
+  }
+  footer a { color: var(--accent-light); text-decoration: none; }
+  footer a:hover { text-decoration: underline; }
+
+  /* ── Responsive ────────────────────────────────────────── */
+  @media (max-width: 640px) {
+    header { padding: 16px; }
+    main   { padding: 16px 12px 32px; }
+    .grid  { grid-template-columns: 1fr; }
+  }
+</style>
+</head>
+<body>
+
+<!-- ═══════════════════════════════════════════════════════ HEADER -->
+<header>
+  <div class="logo">
+    <div class="logo-icon">LA</div>
+    <div>
+      <h1>LiteAds Dashboard</h1>
+      <p>CPM CTV &amp; In-App Video Ad Server</p>
+    </div>
+  </div>
+  <div class="header-badges">
+    <span class="badge badge-purple">OpenRTB 2.6</span>
+    <span class="badge badge-purple">VAST 2.0–4.2</span>
+    <span class="badge badge-green">CPM Only</span>
+  </div>
+</header>
+
+<!-- ═══════════════════════════════════════════════════════ MAIN -->
+<main>
+
+  <!-- Status bar -->
+  <div class="status-bar">
+    <div class="status-card" id="status-server">
+      <div class="status-dot dot-yellow" id="dot-server"></div>
+      <div>
+        <div class="status-label">Ad Server</div>
+        <div class="status-value" id="val-server">Checking…</div>
+      </div>
+    </div>
+    <div class="status-card" id="status-pg">
+      <div class="status-dot dot-yellow" id="dot-pg"></div>
+      <div>
+        <div class="status-label">PostgreSQL</div>
+        <div class="status-value" id="val-pg">:5432</div>
+      </div>
+    </div>
+    <div class="status-card" id="status-redis">
+      <div class="status-dot dot-yellow" id="dot-redis"></div>
+      <div>
+        <div class="status-label">Redis</div>
+        <div class="status-value" id="val-redis">:6379</div>
+      </div>
+    </div>
+    <div class="status-card">
+      <div class="status-dot dot-yellow" id="dot-nginx"></div>
+      <div>
+        <div class="status-label">Nginx</div>
+        <div class="status-value">:80 (production)</div>
+      </div>
+    </div>
+    <div class="status-card">
+      <div class="status-dot dot-yellow" id="dot-prom"></div>
+      <div>
+        <div class="status-label">Prometheus</div>
+        <div class="status-value">:9090 (monitoring)</div>
+      </div>
+    </div>
+    <div class="status-card">
+      <div class="status-dot dot-yellow" id="dot-grafana"></div>
+      <div>
+        <div class="status-label">Grafana</div>
+        <div class="status-value">:3000 (monitoring)</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ── Core API Endpoints ─────────────────────────────── -->
+  <div class="section-title">Core API Endpoints</div>
+  <div class="grid">
+
+    <div class="card">
+      <div class="card-head">
+        <span class="card-name">🩺 Health Check</span>
+        <span class="card-method m-get">GET</span>
+      </div>
+      <div class="card-url">
+        <a href="http://localhost:8000/health" target="_blank">http://localhost:8000/health</a>
+        <button class="copy-btn" onclick="copyUrl(this,'http://localhost:8000/health')" title="Copy URL">📋</button>
+      </div>
+      <div class="card-desc">Server health status. Returns JSON with service health, uptime, and version.</div>
+    </div>
+
+    <div class="card">
+      <div class="card-head">
+        <span class="card-name">📡 OpenRTB 2.6 Bid</span>
+        <span class="card-method m-post">POST</span>
+      </div>
+      <div class="card-url">
+        <a href="http://localhost:8000/api/v1/openrtb/bid" target="_blank">http://localhost:8000/api/v1/openrtb/bid</a>
+        <button class="copy-btn" onclick="copyUrl(this,'http://localhost:8000/api/v1/openrtb/bid')" title="Copy URL">📋</button>
+      </div>
+      <div class="card-desc">OpenRTB 2.6 bid endpoint for SSPs. Accepts standard bid requests from Roku, Fire TV, LG, Samsung, etc.</div>
+    </div>
+
+    <div class="card">
+      <div class="card-head">
+        <span class="card-name">📺 VAST Tag</span>
+        <span class="card-method m-get">GET</span>
+      </div>
+      <div class="card-url">
+        <a href="http://localhost:8000/api/vast?sid=test&w=1920&h=1080&min_dur=5&max_dur=30" target="_blank">http://localhost:8000/api/vast</a>
+        <button class="copy-btn" onclick="copyUrl(this,'http://localhost:8000/api/vast?sid=test&w=1920&h=1080&min_dur=5&max_dur=30')" title="Copy URL">📋</button>
+      </div>
+      <div class="card-desc">VAST XML endpoint for tag-based integrations (LG webOS, Samsung Tizen, SSAI). Query params: <code>sid</code> <code>w</code> <code>h</code> <code>min_dur</code> <code>max_dur</code> <code>ip</code> <code>ua</code> <code>ifa</code>.</div>
+    </div>
+
+    <div class="card">
+      <div class="card-head">
+        <span class="card-name">🎯 Ad Request</span>
+        <span class="card-method m-post">POST</span>
+      </div>
+      <div class="card-url">
+        <a href="http://localhost:8000/api/v1/ad/request" target="_blank">http://localhost:8000/api/v1/ad/request</a>
+        <button class="copy-btn" onclick="copyUrl(this,'http://localhost:8000/api/v1/ad/request')" title="Copy URL">📋</button>
+      </div>
+      <div class="card-desc">Internal ad request endpoint. Returns ranked ad candidates for a placement with VAST XML.</div>
+    </div>
+
+    <div class="card">
+      <div class="card-head">
+        <span class="card-name">⛔ No-Bid</span>
+        <span class="card-method m-post">POST</span>
+      </div>
+      <div class="card-url">
+        <a href="http://localhost:8000/api/v1/openrtb/nobid" target="_blank">http://localhost:8000/api/v1/openrtb/nobid</a>
+        <button class="copy-btn" onclick="copyUrl(this,'http://localhost:8000/api/v1/openrtb/nobid')" title="Copy URL">📋</button>
+      </div>
+      <div class="card-desc">Returns a standard OpenRTB no-bid response. Used when no matching ads are available.</div>
+    </div>
+
+  </div>
+
+  <!-- ── Event Tracking ─────────────────────────────────── -->
+  <div class="section-title">Event Tracking</div>
+  <div class="grid">
+
+    <div class="card">
+      <div class="card-head">
+        <span class="card-name">👁️ Impression</span>
+        <span class="card-method m-post">POST</span>
+      </div>
+      <div class="card-url">
+        <a href="http://localhost:8000/api/v1/event/impression" target="_blank">http://localhost:8000/api/v1/event/impression</a>
+        <button class="copy-btn" onclick="copyUrl(this,'http://localhost:8000/api/v1/event/impression')" title="Copy URL">📋</button>
+      </div>
+      <div class="card-desc">VAST impression beacon. Fires on ad render. Records cost and auction price.</div>
+    </div>
+
+    <div class="card">
+      <div class="card-head">
+        <span class="card-name">🖱️ Click</span>
+        <span class="card-method m-post">POST</span>
+      </div>
+      <div class="card-url">
+        <a href="http://localhost:8000/api/v1/event/click" target="_blank">http://localhost:8000/api/v1/event/click</a>
+        <button class="copy-btn" onclick="copyUrl(this,'http://localhost:8000/api/v1/event/click')" title="Copy URL">📋</button>
+      </div>
+      <div class="card-desc">Click-through tracking event.</div>
+    </div>
+
+    <div class="card">
+      <div class="card-head">
+        <span class="card-name">▶️ Video Events</span>
+        <span class="card-method m-post">POST</span>
+      </div>
+      <div class="card-url">
+        <a href="http://localhost:8000/api/v1/event/video" target="_blank">http://localhost:8000/api/v1/event/video</a>
+        <button class="copy-btn" onclick="copyUrl(this,'http://localhost:8000/api/v1/event/video')" title="Copy URL">📋</button>
+      </div>
+      <div class="card-desc">VAST video progress events: <code>start</code> <code>firstQuartile</code> <code>midpoint</code> <code>thirdQuartile</code> <code>complete</code> <code>skip</code>.</div>
+    </div>
+
+    <div class="card">
+      <div class="card-head">
+        <span class="card-name">🚨 Error</span>
+        <span class="card-method m-post">POST</span>
+      </div>
+      <div class="card-url">
+        <a href="http://localhost:8000/api/v1/event/error" target="_blank">http://localhost:8000/api/v1/event/error</a>
+        <button class="copy-btn" onclick="copyUrl(this,'http://localhost:8000/api/v1/event/error')" title="Copy URL">📋</button>
+      </div>
+      <div class="card-desc">VAST error tracking. Logs error codes for debugging fill-rate issues.</div>
+    </div>
+
+  </div>
+
+  <!-- ── Documentation & Tools ──────────────────────────── -->
+  <div class="section-title">Documentation &amp; Tools</div>
+  <div class="grid">
+
+    <div class="card">
+      <div class="card-head">
+        <span class="card-name">📖 Swagger UI</span>
+        <span class="card-method m-ui">UI</span>
+      </div>
+      <div class="card-url">
+        <a href="http://localhost:8000/docs" target="_blank">http://localhost:8000/docs</a>
+        <button class="copy-btn" onclick="copyUrl(this,'http://localhost:8000/docs')" title="Copy URL">📋</button>
+      </div>
+      <div class="card-desc">Interactive API documentation. Test endpoints directly in the browser.</div>
+    </div>
+
+    <div class="card">
+      <div class="card-head">
+        <span class="card-name">📘 ReDoc</span>
+        <span class="card-method m-ui">UI</span>
+      </div>
+      <div class="card-url">
+        <a href="http://localhost:8000/redoc" target="_blank">http://localhost:8000/redoc</a>
+        <button class="copy-btn" onclick="copyUrl(this,'http://localhost:8000/redoc')" title="Copy URL">📋</button>
+      </div>
+      <div class="card-desc">Clean, readable API reference with schema details and examples.</div>
+    </div>
+
+    <div class="card">
+      <div class="card-head">
+        <span class="card-name">📊 Grafana</span>
+        <span class="card-method m-ui">UI</span>
+      </div>
+      <div class="card-url">
+        <a href="http://localhost:3000" target="_blank">http://localhost:3000</a>
+        <button class="copy-btn" onclick="copyUrl(this,'http://localhost:3000')" title="Copy URL">📋</button>
+      </div>
+      <div class="card-desc">Monitoring dashboards. Login: <code>admin</code> / <code>admin</code>. Requires <code>--profile monitoring</code>.</div>
+    </div>
+
+    <div class="card">
+      <div class="card-head">
+        <span class="card-name">🔥 Prometheus</span>
+        <span class="card-method m-ui">UI</span>
+      </div>
+      <div class="card-url">
+        <a href="http://localhost:9090" target="_blank">http://localhost:9090</a>
+        <button class="copy-btn" onclick="copyUrl(this,'http://localhost:9090')" title="Copy URL">📋</button>
+      </div>
+      <div class="card-desc">Metrics explorer and alert manager. Requires <code>--profile monitoring</code>.</div>
+    </div>
+
+  </div>
+
+  <!-- ── Infrastructure ─────────────────────────────────── -->
+  <div class="section-title">Infrastructure</div>
+  <div class="grid">
+
+    <div class="card">
+      <div class="card-head">
+        <span class="card-name">🐘 PostgreSQL</span>
+        <span class="card-method m-tcp">TCP</span>
+      </div>
+      <div class="card-url">
+        <span>localhost:5432</span>
+        <button class="copy-btn" onclick="copyUrl(this,'localhost:5432')" title="Copy">📋</button>
+      </div>
+      <div class="card-desc">Database: <code>liteads</code> · User: <code>liteads</code> · Password: <code>liteads_password</code> (dev). Includes 6 tables with seed data.</div>
+    </div>
+
+    <div class="card">
+      <div class="card-head">
+        <span class="card-name">⚡ Redis</span>
+        <span class="card-method m-tcp">TCP</span>
+      </div>
+      <div class="card-url">
+        <span>localhost:6379</span>
+        <button class="copy-btn" onclick="copyUrl(this,'localhost:6379')" title="Copy">📋</button>
+      </div>
+      <div class="card-desc">Cache &amp; frequency caps. Max memory: 256 MB, eviction: <code>allkeys-lru</code>. Dev DB index: 1.</div>
+    </div>
+
+    <div class="card">
+      <div class="card-head">
+        <span class="card-name">🌐 Nginx</span>
+        <span class="card-method m-tcp">HTTP</span>
+      </div>
+      <div class="card-url">
+        <a href="http://localhost:80" target="_blank">http://localhost:80</a>
+        <button class="copy-btn" onclick="copyUrl(this,'http://localhost:80')" title="Copy URL">📋</button>
+      </div>
+      <div class="card-desc">Reverse proxy &amp; load balancer. Requires <code>--profile production</code>. Supports scaling to multiple ad-server instances.</div>
+    </div>
+
+  </div>
+
+  <!-- ── Quick Commands ─────────────────────────────────── -->
+  <div class="section-title">Quick Commands</div>
+  <div class="grid">
+
+    <div class="card">
+      <div class="card-head"><span class="card-name">🐳 Docker – Core</span></div>
+      <div class="card-url"><span>docker compose up -d</span>
+        <button class="copy-btn" onclick="copyUrl(this,'docker compose up -d')" title="Copy">📋</button></div>
+      <div class="card-desc">Start ad-server + PostgreSQL + Redis.</div>
+    </div>
+
+    <div class="card">
+      <div class="card-head"><span class="card-name">🐳 Docker – Full</span></div>
+      <div class="card-url"><span>docker compose --profile production --profile monitoring up -d</span>
+        <button class="copy-btn" onclick="copyUrl(this,'docker compose --profile production --profile monitoring up -d')" title="Copy">📋</button></div>
+      <div class="card-desc">Start all services including Nginx, Prometheus, and Grafana.</div>
+    </div>
+
+    <div class="card">
+      <div class="card-head"><span class="card-name">🔧 Local Dev</span></div>
+      <div class="card-url"><span>make dev</span>
+        <button class="copy-btn" onclick="copyUrl(this,'make dev')" title="Copy">📋</button></div>
+      <div class="card-desc">Start dev server with hot-reload and debug logging.</div>
+    </div>
+
+    <div class="card">
+      <div class="card-head"><span class="card-name">🧪 Run Tests</span></div>
+      <div class="card-url"><span>make test</span>
+        <button class="copy-btn" onclick="copyUrl(this,'make test')" title="Copy">📋</button></div>
+      <div class="card-desc">Run pytest with coverage report.</div>
+    </div>
+
+    <div class="card">
+      <div class="card-head"><span class="card-name">📦 Install</span></div>
+      <div class="card-url"><span>pip install -e ".[dev]"</span>
+        <button class="copy-btn" onclick="copyUrl(this, 'pip install -e .[dev]')" title="Copy">📋</button></div>
+      <div class="card-desc">Install in editable mode with dev dependencies.</div>
+    </div>
+
+    <div class="card">
+      <div class="card-head"><span class="card-name">📈 Scale</span></div>
+      <div class="card-url"><span>docker compose --profile production up -d --scale ad-server=3</span>
+        <button class="copy-btn" onclick="copyUrl(this,'docker compose --profile production up -d --scale ad-server=3')" title="Copy">📋</button></div>
+      <div class="card-desc">Scale to 3 ad-server instances behind Nginx.</div>
+    </div>
+
+  </div>
+
+</main>
+
+<!-- ═══════════════════════════════════════════════════════ FOOTER -->
+<footer>
+  LiteAds Ad Server · CPM CTV &amp; In-App Video · OpenRTB 2.6 · VAST 2.0–4.2<br>
+  <a href="INSTALL.md">Installation Guide</a> · <a href="README.md">README</a> · <a href="LICENSE">License</a>
+</footer>
+
+<!-- ═══════════════════════════════════════════════════════ JS -->
+<script>
+  // Copy to clipboard
+  function copyUrl(btn, text) {
+    navigator.clipboard.writeText(text).then(() => {
+      btn.classList.add('copied');
+      btn.textContent = '✅';
+      setTimeout(() => { btn.classList.remove('copied'); btn.textContent = '📋'; }, 1500);
+    });
+  }
+
+  // Health check probe
+  async function checkHealth(url, dotId, valId, label) {
+    const dot = document.getElementById(dotId);
+    const val = document.getElementById(valId);
+    try {
+      const res = await fetch(url, { mode: 'cors', signal: AbortSignal.timeout(3000) });
+      if (res.ok) {
+        dot.className = 'status-dot dot-green';
+        if (val) val.textContent = label + ' ✓ Online';
+      } else {
+        dot.className = 'status-dot dot-red';
+        if (val) val.textContent = label + ' ✗ ' + res.status;
+      }
+    } catch {
+      dot.className = 'status-dot dot-red';
+      if (val) val.textContent = label + ' ✗ Offline';
+    }
+  }
+
+  // Run health checks on load
+  window.addEventListener('DOMContentLoaded', () => {
+    checkHealth('http://localhost:8000/health', 'dot-server', 'val-server', ':8000');
+    // Prometheus & Grafana (may be CORS-blocked but at least we try)
+    checkHealth('http://localhost:9090/-/healthy', 'dot-prom', null, '');
+    checkHealth('http://localhost:3000/api/health', 'dot-grafana', null, '');
+    checkHealth('http://localhost:80/health', 'dot-nginx', null, '');
+  });
+
+  // Auto-refresh health every 30s
+  setInterval(() => {
+    checkHealth('http://localhost:8000/health', 'dot-server', 'val-server', ':8000');
+    checkHealth('http://localhost:9090/-/healthy', 'dot-prom', null, '');
+    checkHealth('http://localhost:3000/api/health', 'dot-grafana', null, '');
+    checkHealth('http://localhost:80/health', 'dot-nginx', null, '');
+  }, 30000);
+</script>
+
+</body>
+</html>

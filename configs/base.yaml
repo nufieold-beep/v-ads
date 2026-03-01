@@ -1,0 +1,152 @@
+# =============================================================================
+# LiteAds Base Configuration – CPM CTV & In-App Video Only
+# =============================================================================
+
+app:
+  name: "LiteAds"
+  version: "0.2.0"
+  debug: false
+
+server:
+  host: "0.0.0.0"
+  port: 8000
+  workers: 4
+  reload: false
+
+# ---------------------------------------------------------------------------
+# Infrastructure
+# ---------------------------------------------------------------------------
+
+database:
+  host: "localhost"
+  port: 5432
+  name: "liteads"
+  user: "liteads"
+  password: ""
+  pool_size: 10
+  max_overflow: 20
+
+redis:
+  host: "localhost"
+  port: 6379
+  db: 0
+  password: ""
+  pool_size: 10
+
+# ---------------------------------------------------------------------------
+# Ad Serving – CPM Video Only
+# ---------------------------------------------------------------------------
+
+ad_serving:
+  default_num_ads: 1
+  max_num_ads: 10
+  timeout_ms: 100
+  enable_ml_prediction: true
+  model_path: ""
+  supported_environments:
+    - "ctv"
+    - "inapp"
+  default_bid_floor_cpm: 1.0
+  min_cpm: 0.50
+  fallback_fill_rate: 0.85
+  fallback_vtr: 0.70
+  fallback_ctr: 0.005
+  ctv_device_families:
+    - "roku"
+    - "firetv"
+    - "tvos"
+    - "tizen"
+    - "androidtv"
+    - "webos"
+    - "vizio"
+    - "chromecast"
+    - "playstation"
+    - "xbox"
+
+# ---------------------------------------------------------------------------
+# Video Creative Settings
+# ---------------------------------------------------------------------------
+
+video:
+  supported_mimes:
+    - "video/mp4"
+    - "video/webm"
+    - "video/ogg"
+    - "video/3gpp"
+    - "application/x-mpegURL"
+    - "application/dash+xml"
+  min_duration: 5
+  max_duration: 120
+  default_duration: 30
+  min_bitrate: 500
+  max_bitrate: 25000
+  supported_vast_protocols:
+    - 2   # VAST 2.0
+    - 3   # VAST 3.0
+    - 6   # VAST 4.0
+    - 7   # VAST 4.1
+    - 8   # VAST 4.2
+
+# ---------------------------------------------------------------------------
+# VAST XML Generation
+# ---------------------------------------------------------------------------
+
+vast:
+  supported_versions:
+    - "2.0"
+    - "3.0"
+    - "4.0"
+    - "4.1"
+    - "4.2"
+  default_vast_version: "4.0"
+  tracking_base_url: ""
+  include_companion: true
+  default_skip_offset: 5
+  error_tracking: true
+
+# ---------------------------------------------------------------------------
+# OpenRTB 2.6
+# ---------------------------------------------------------------------------
+
+openrtb:
+  supported_environments:
+    - "ctv"
+    - "inapp"
+  default_auction_type: 2        # second-price
+  default_tmax: 200
+  default_currency: "USD"
+  auction_price_macro: "${AUCTION_PRICE}"
+  default_bid_floor: 0.50
+  max_bid_floor: 100.0
+
+# ---------------------------------------------------------------------------
+# Frequency Control
+# ---------------------------------------------------------------------------
+
+frequency:
+  default_daily_cap: 3
+  default_hourly_cap: 1
+  ttl_hours: 24
+
+# ---------------------------------------------------------------------------
+# ML / Fill-Rate Model
+# ---------------------------------------------------------------------------
+
+ml:
+  model_dir: "./models"
+  fill_rate_model: "fillrate_v1"
+  vtr_model: "vtr_v1"
+  embedding_dim: 8
+  batch_size: 128
+
+# ---------------------------------------------------------------------------
+# Observability
+# ---------------------------------------------------------------------------
+
+logging:
+  level: "INFO"
+  format: "json"
+
+monitoring:
+  enabled: true
+  prometheus_port: 9090

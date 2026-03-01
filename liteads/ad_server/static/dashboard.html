@@ -1,0 +1,1519 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>LiteAds – Ad Server Dashboard</title>
+<style>
+/* ── Reset & Variables ─────────────────────────────────────── */
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+:root{
+  --bg:#0f1117;--bg2:#181b24;--bg3:#1e222d;--bg4:#272c3a;
+  --fg:#e4e6ed;--fg2:#9ba1b0;--fg3:#6b7280;
+  --accent:#6366f1;--accent2:#818cf8;--accent-bg:rgba(99,102,241,.12);
+  --green:#22c55e;--green-bg:rgba(34,197,94,.12);
+  --red:#ef4444;--red-bg:rgba(239,68,68,.12);
+  --yellow:#eab308;--yellow-bg:rgba(234,179,8,.12);
+  --blue:#3b82f6;--blue-bg:rgba(59,130,246,.12);
+  --orange:#f97316;--orange-bg:rgba(249,115,22,.12);
+  --radius:8px;--radius-lg:12px;
+  --shadow:0 1px 3px rgba(0,0,0,.3),0 1px 2px rgba(0,0,0,.2);
+  --shadow-lg:0 10px 25px rgba(0,0,0,.4);
+  --transition:all .2s ease;
+}
+body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;background:var(--bg);color:var(--fg);line-height:1.5;min-height:100vh}
+a{color:var(--accent2);text-decoration:none}
+a:hover{text-decoration:underline}
+button{cursor:pointer;font-family:inherit}
+
+/* ── Layout ──────────────────────────────────────────────── */
+.app{display:flex;min-height:100vh}
+.sidebar{width:250px;background:var(--bg2);border-right:1px solid var(--bg4);display:flex;flex-direction:column;position:fixed;top:0;left:0;bottom:0;z-index:100}
+.sidebar-brand{padding:20px 24px;border-bottom:1px solid var(--bg4);display:flex;align-items:center;gap:10px}
+.sidebar-brand svg{width:28px;height:28px;flex-shrink:0}
+.sidebar-brand h1{font-size:18px;font-weight:700;color:var(--fg);letter-spacing:-.3px}
+.sidebar-brand span{font-size:10px;background:var(--accent);color:#fff;padding:2px 6px;border-radius:10px;font-weight:600}
+.sidebar-nav{flex:1;padding:12px 0;overflow-y:auto}
+.nav-section{padding:8px 24px;font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:.8px;color:var(--fg3);margin-top:8px}
+.nav-item{display:flex;align-items:center;gap:10px;padding:10px 24px;color:var(--fg2);font-size:14px;cursor:pointer;transition:var(--transition);border-left:3px solid transparent}
+.nav-item:hover{background:var(--bg3);color:var(--fg)}
+.nav-item.active{background:var(--accent-bg);color:var(--accent2);border-left-color:var(--accent)}
+.nav-item svg{width:18px;height:18px;flex-shrink:0;opacity:.7}
+.nav-item.active svg{opacity:1}
+.main{margin-left:250px;flex:1;min-width:0}
+.topbar{height:60px;background:var(--bg2);border-bottom:1px solid var(--bg4);display:flex;align-items:center;justify-content:space-between;padding:0 32px;position:sticky;top:0;z-index:50}
+.topbar-title{font-size:20px;font-weight:600}
+.topbar-actions{display:flex;align-items:center;gap:12px}
+.content{padding:24px 32px}
+
+/* ── Cards & Grids ───────────────────────────────────────── */
+.stats-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:16px;margin-bottom:24px}
+.stat-card{background:var(--bg2);border:1px solid var(--bg4);border-radius:var(--radius-lg);padding:20px;transition:var(--transition)}
+.stat-card:hover{border-color:var(--accent);transform:translateY(-2px);box-shadow:var(--shadow-lg)}
+.stat-card .label{font-size:12px;color:var(--fg3);text-transform:uppercase;letter-spacing:.6px;margin-bottom:6px}
+.stat-card .value{font-size:28px;font-weight:700;letter-spacing:-.5px}
+.stat-card .sub{font-size:12px;color:var(--fg2);margin-top:4px}
+.stat-card.green .value{color:var(--green)}
+.stat-card.blue .value{color:var(--blue)}
+.stat-card.yellow .value{color:var(--yellow)}
+.stat-card.accent .value{color:var(--accent2)}
+.stat-card.orange .value{color:var(--orange)}
+
+.card{background:var(--bg2);border:1px solid var(--bg4);border-radius:var(--radius-lg);margin-bottom:20px;overflow:hidden}
+.card-header{padding:16px 20px;border-bottom:1px solid var(--bg4);display:flex;align-items:center;justify-content:space-between}
+.card-header h3{font-size:15px;font-weight:600}
+.card-body{padding:20px}
+
+/* ── Buttons ─────────────────────────────────────────────── */
+.btn{display:inline-flex;align-items:center;gap:6px;padding:8px 16px;border-radius:var(--radius);border:1px solid transparent;font-size:13px;font-weight:500;transition:var(--transition)}
+.btn-primary{background:var(--accent);color:#fff}
+.btn-primary:hover{background:var(--accent2)}
+.btn-secondary{background:var(--bg3);color:var(--fg);border-color:var(--bg4)}
+.btn-secondary:hover{background:var(--bg4)}
+.btn-danger{background:var(--red);color:#fff}
+.btn-danger:hover{background:#dc2626}
+.btn-sm{padding:5px 10px;font-size:12px}
+.btn-icon{padding:6px;border-radius:6px;background:transparent;color:var(--fg2)}
+.btn-icon:hover{background:var(--bg3);color:var(--fg)}
+
+/* ── Table ───────────────────────────────────────────────── */
+.table-wrap{overflow-x:auto}
+table{width:100%;border-collapse:collapse}
+thead th{padding:10px 14px;text-align:left;font-size:12px;font-weight:600;text-transform:uppercase;letter-spacing:.5px;color:var(--fg3);border-bottom:1px solid var(--bg4);white-space:nowrap}
+tbody td{padding:12px 14px;border-bottom:1px solid var(--bg3);font-size:13px;white-space:nowrap}
+tbody tr{transition:var(--transition)}
+tbody tr:hover{background:var(--bg3)}
+
+/* ── Badges ──────────────────────────────────────────────── */
+.badge{display:inline-flex;align-items:center;padding:3px 10px;border-radius:20px;font-size:11px;font-weight:600;letter-spacing:.3px}
+.badge-active{background:var(--green-bg);color:var(--green)}
+.badge-paused{background:var(--yellow-bg);color:var(--yellow)}
+.badge-inactive{background:var(--red-bg);color:var(--red)}
+.badge-deleted{background:rgba(107,114,128,.15);color:var(--fg3)}
+.badge-ortb{background:var(--blue-bg);color:var(--blue)}
+.badge-vast{background:var(--orange-bg);color:var(--orange)}
+
+/* ── Forms / Modal ───────────────────────────────────────── */
+.modal-overlay{position:fixed;inset:0;background:rgba(0,0,0,.6);display:flex;align-items:center;justify-content:center;z-index:1000;opacity:0;pointer-events:none;transition:opacity .2s}
+.modal-overlay.active{opacity:1;pointer-events:all}
+.modal{background:var(--bg2);border:1px solid var(--bg4);border-radius:var(--radius-lg);width:90%;max-width:640px;max-height:85vh;display:flex;flex-direction:column;box-shadow:var(--shadow-lg)}
+.modal-header{padding:16px 20px;border-bottom:1px solid var(--bg4);display:flex;align-items:center;justify-content:space-between}
+.modal-header h3{font-size:16px;font-weight:600}
+.modal-body{padding:20px;overflow-y:auto;flex:1}
+.modal-footer{padding:12px 20px;border-top:1px solid var(--bg4);display:flex;justify-content:flex-end;gap:10px}
+.form-row{display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-bottom:14px}
+.form-group{display:flex;flex-direction:column;gap:4px}
+.form-group.full{grid-column:1/-1}
+.form-group label{font-size:12px;font-weight:600;color:var(--fg2)}
+.form-group input,.form-group select,.form-group textarea{background:var(--bg3);border:1px solid var(--bg4);border-radius:var(--radius);padding:8px 12px;color:var(--fg);font-size:13px;transition:var(--transition)}
+.form-group input:focus,.form-group select:focus,.form-group textarea:focus{outline:none;border-color:var(--accent)}
+.form-group textarea{min-height:70px;resize:vertical}
+
+/* ── Toast ───────────────────────────────────────────────── */
+.toast-container{position:fixed;top:16px;right:16px;z-index:2000;display:flex;flex-direction:column;gap:8px}
+.toast{padding:12px 20px;border-radius:var(--radius);font-size:13px;font-weight:500;animation:slideIn .3s ease;min-width:260px;box-shadow:var(--shadow-lg)}
+.toast-success{background:#166534;color:#bbf7d0}
+.toast-error{background:#7f1d1d;color:#fecaca}
+.toast-info{background:#1e3a5f;color:#bfdbfe}
+@keyframes slideIn{from{transform:translateX(100%);opacity:0}to{transform:translateX(0);opacity:1}}
+
+/* ── Tabs ────────────────────────────────────────────────── */
+.tabs{display:flex;gap:4px;margin-bottom:20px;border-bottom:1px solid var(--bg4);padding-bottom:0}
+.tab{padding:10px 18px;font-size:13px;font-weight:500;color:var(--fg2);cursor:pointer;border-bottom:2px solid transparent;transition:var(--transition);margin-bottom:-1px}
+.tab:hover{color:var(--fg)}
+.tab.active{color:var(--accent2);border-bottom-color:var(--accent)}
+
+/* ── Section visibility ──────────────────────────────────── */
+.page{display:none}
+.page.active{display:block}
+
+/* ── Spinner ─────────────────────────────────────────────── */
+.spinner{width:20px;height:20px;border:2px solid var(--bg4);border-top-color:var(--accent);border-radius:50%;animation:spin .6s linear infinite;display:inline-block}
+@keyframes spin{to{transform:rotate(360deg)}}
+.loading-row td{text-align:center;padding:40px;color:var(--fg3)}
+
+/* ── Empty state ─────────────────────────────────────────── */
+.empty{text-align:center;padding:48px 20px;color:var(--fg3)}
+.empty svg{width:48px;height:48px;margin-bottom:12px;opacity:.4}
+.empty p{margin-bottom:16px}
+
+/* ── VAST Tag display ────────────────────────────────────── */
+.vast-tag-display{background:var(--bg);border:1px solid var(--bg4);border-radius:var(--radius);padding:14px;font-family:'Fira Code',monospace;font-size:12px;word-break:break-all;white-space:pre-wrap;max-height:200px;overflow-y:auto;color:var(--green)}
+
+/* ── Multi-select checkboxes ─────────────────────────────── */
+.checkbox-grid{display:flex;flex-direction:column;gap:6px;max-height:200px;overflow-y:auto;background:var(--bg3);border:1px solid var(--bg4);border-radius:var(--radius);padding:10px}
+.checkbox-grid label{display:flex;align-items:center;gap:8px;font-size:13px;color:var(--fg2);cursor:pointer}
+.checkbox-grid label:hover{color:var(--fg)}
+.checkbox-grid input[type="checkbox"]{accent-color:var(--accent)}
+</style>
+</head>
+<body>
+<div class="app">
+
+<!-- ═══════════════ SIDEBAR ═══════════════ -->
+<aside class="sidebar">
+  <div class="sidebar-brand">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z" stroke="var(--accent2)"/></svg>
+    <div><h1>LiteAds</h1></div>
+    <span>v2.0</span>
+  </div>
+  <nav class="sidebar-nav">
+    <div class="nav-section">Main</div>
+    <div class="nav-item active" data-page="dashboard" onclick="showPage('dashboard')">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg>
+      Dashboard
+    </div>
+
+    <div class="nav-section">Supply</div>
+    <div class="nav-item" data-page="supply-tags" onclick="showPage('supply-tags')">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>
+      VAST Tags
+    </div>
+
+    <div class="nav-section">Demand</div>
+    <div class="nav-item" data-page="demand-ortb" onclick="showPage('demand-ortb')">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="2" y1="12" x2="22" y2="12"/><path d="M12 2a15.3 15.3 0 014 10 15.3 15.3 0 01-4 10 15.3 15.3 0 01-4-10 15.3 15.3 0 014-10z"/></svg>
+      ORTB Endpoints
+    </div>
+    <div class="nav-item" data-page="demand-vast" onclick="showPage('demand-vast')">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="23 7 16 12 23 17 23 7"/><rect x="1" y="5" width="15" height="14" rx="2" ry="2"/></svg>
+      VAST Tags
+    </div>
+
+    <div class="nav-section">Manage</div>
+    <div class="nav-item" data-page="advertisers" onclick="showPage('advertisers')">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 21v-2a4 4 0 00-4-4H8a4 4 0 00-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>
+      Advertisers
+    </div>
+    <div class="nav-item" data-page="campaigns" onclick="showPage('campaigns')">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 12h-4l-3 9L9 3l-3 9H2"/></svg>
+      Campaigns
+    </div>
+    <div class="nav-item" data-page="targeting" onclick="showPage('targeting')">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><circle cx="12" cy="12" r="6"/><circle cx="12" cy="12" r="2"/></svg>
+      Targeting
+    </div>
+
+    <div class="nav-section">Reporting</div>
+    <div class="nav-item" data-page="analytics" onclick="showPage('analytics')">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="20" x2="18" y2="10"/><line x1="12" y1="20" x2="12" y2="4"/><line x1="6" y1="20" x2="6" y2="14"/></svg>
+      Analytics
+    </div>
+    <div class="nav-item" data-page="health" onclick="showPage('health')">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 12h-4l-3 9L9 3l-3 9H2"/><circle cx="12" cy="12" r="1"/></svg>
+      Delivery Health
+    </div>
+
+    <div class="nav-section">System</div>
+    <div class="nav-item" data-page="settings" onclick="showPage('settings')">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 00.33 1.82l.06.06a2 2 0 010 2.83 2 2 0 01-2.83 0l-.06-.06a1.65 1.65 0 00-1.82-.33 1.65 1.65 0 00-1 1.51V21a2 2 0 01-4 0v-.09A1.65 1.65 0 009 19.4a1.65 1.65 0 00-1.82.33l-.06.06a2 2 0 01-2.83-2.83l.06-.06A1.65 1.65 0 004.68 15a1.65 1.65 0 00-1.51-1H3a2 2 0 010-4h.09A1.65 1.65 0 004.6 9a1.65 1.65 0 00-.33-1.82l-.06-.06a2 2 0 012.83-2.83l.06.06A1.65 1.65 0 009 4.68a1.65 1.65 0 001-1.51V3a2 2 0 014 0v.09a1.65 1.65 0 001 1.51 1.65 1.65 0 001.82-.33l.06-.06a2 2 0 012.83 2.83l-.06.06A1.65 1.65 0 0019.4 9a1.65 1.65 0 001.51 1H21a2 2 0 010 4h-.09a1.65 1.65 0 00-1.51 1z"/></svg>
+      Settings
+    </div>
+  </nav>
+</aside>
+
+<!-- ═══════════════ MAIN CONTENT ═══════════════ -->
+<div class="main">
+<div class="topbar">
+  <div class="topbar-title" id="pageTitle">Dashboard</div>
+  <div class="topbar-actions">
+    <button class="btn btn-secondary btn-sm" onclick="refreshCurrentPage()">↻ Refresh</button>
+    <span style="color:var(--fg3);font-size:12px" id="lastUpdated"></span>
+  </div>
+</div>
+
+<div class="content">
+
+<!-- ═══════════════ DASHBOARD PAGE ═══════════════ -->
+<div class="page active" id="page-dashboard">
+  <div class="stats-grid" id="dashStats">
+    <div class="stat-card accent"><div class="label">Supply Tags</div><div class="value" id="statSupply">–</div></div>
+    <div class="stat-card orange"><div class="label">Demand Sources</div><div class="value" id="statDemand">–</div></div>
+    <div class="stat-card blue"><div class="label">Active Campaigns</div><div class="value" id="statCamps">–</div></div>
+    <div class="stat-card green"><div class="label">Total Impressions</div><div class="value" id="statImps">–</div></div>
+    <div class="stat-card green"><div class="label">Fill Rate</div><div class="value" id="statFillRate">–</div></div>
+    <div class="stat-card"><div class="label">VTR</div><div class="value" style="color:var(--blue)" id="statVtr">–</div></div>
+  </div>
+
+  <div style="display:grid;grid-template-columns:1fr 1fr;gap:20px;margin-bottom:20px">
+    <div class="card">
+      <div class="card-header"><h3>Supply Tags</h3></div>
+      <div class="card-body table-wrap">
+        <table>
+          <thead><tr><th>Slot ID</th><th>Name</th><th>Floor</th><th>Margin</th><th>Demand</th><th>Status</th></tr></thead>
+          <tbody id="dashSupplyTags"><tr class="loading-row"><td colspan="6"><div class="spinner"></div></td></tr></tbody>
+        </table>
+      </div>
+    </div>
+    <div class="card">
+      <div class="card-header"><h3>Demand Sources</h3></div>
+      <div class="card-body table-wrap">
+        <table>
+          <thead><tr><th>Name</th><th>Type</th><th>Floor</th><th>Margin</th><th>Status</th></tr></thead>
+          <tbody id="dashDemandSources"><tr class="loading-row"><td colspan="5"><div class="spinner"></div></td></tr></tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="card-header"><h3>Recent Campaigns</h3></div>
+    <div class="card-body table-wrap">
+      <table>
+        <thead><tr><th>ID</th><th>Campaign</th><th>Advertiser</th><th>Status</th><th>Budget</th><th>Spent</th><th>Imps</th><th>Clicks</th></tr></thead>
+        <tbody id="dashCampaigns"><tr class="loading-row"><td colspan="8"><div class="spinner"></div></td></tr></tbody>
+      </table>
+    </div>
+  </div>
+</div>
+
+<!-- ═══════════════ SUPPLY TAGS PAGE ═══════════════ -->
+<div class="page" id="page-supply-tags">
+  <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px">
+    <h3 style="font-size:16px">Supply VAST Tags</h3>
+    <button class="btn btn-primary" onclick="openSupplyTagModal()">+ New Supply Tag</button>
+  </div>
+  <p style="color:var(--fg3);font-size:13px;margin-bottom:16px">Publisher-facing VAST tag endpoints. Each tag generates a unique VAST URL for publishers to embed in their video players. Tags can be targeted to specific demand sources with bid floor and margin settings.</p>
+  <div class="card">
+    <div class="card-body table-wrap">
+      <table>
+        <thead><tr><th>ID</th><th>Name</th><th>Slot ID</th><th>Env</th><th>Floor</th><th>Margin</th><th>Duration</th><th>Res</th><th>Demand</th><th>Status</th><th>Actions</th></tr></thead>
+        <tbody id="supplyTableBody"><tr class="loading-row"><td colspan="11"><div class="spinner"></div></td></tr></tbody>
+      </table>
+    </div>
+  </div>
+
+  <!-- Generated VAST Tag URL card -->
+  <div class="card" id="supplyVastUrlCard" style="display:none">
+    <div class="card-header"><h3>Generated VAST Tag URL</h3></div>
+    <div class="card-body">
+      <div class="vast-tag-display" id="supplyVastUrl"></div>
+      <button class="btn btn-secondary btn-sm" style="margin-top:8px" onclick="copyText('supplyVastUrl')">📋 Copy</button>
+    </div>
+  </div>
+
+  <!-- Demand Targeting Card -->
+  <div class="card">
+    <div class="card-header"><h3>Supply → Demand Mappings</h3>
+      <button class="btn btn-primary btn-sm" id="btnAddMapping" onclick="openMappingModal()" disabled>+ Add Mapping</button>
+    </div>
+    <div class="form-row" style="padding:0 20px 12px">
+      <div class="form-group">
+        <label>Select Supply Tag</label>
+        <select id="mappingSupplySelect" onchange="loadMappings()"><option value="">— Choose supply tag —</option></select>
+      </div>
+    </div>
+    <div class="card-body table-wrap" style="padding-top:0">
+      <table>
+        <thead><tr><th>ID</th><th>Demand Source</th><th>Type</th><th>Priority</th><th>Weight</th><th>Status</th><th>Actions</th></tr></thead>
+        <tbody id="mappingTableBody"><tr><td colspan="7" style="text-align:center;color:var(--fg3);padding:30px">Select a supply tag above</td></tr></tbody>
+      </table>
+    </div>
+  </div>
+</div>
+
+<!-- ═══════════════ DEMAND ORTB PAGE ═══════════════ -->
+<div class="page" id="page-demand-ortb">
+  <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px">
+    <h3 style="font-size:16px">Demand ORTB Endpoints</h3>
+    <button class="btn btn-primary" onclick="openDemandEpModal()">+ New Endpoint</button>
+  </div>
+  <p style="color:var(--fg3);font-size:13px;margin-bottom:16px">Third-party OpenRTB 2.6 demand sources (DSPs, bridge ad servers). The ad server sends bid requests to these endpoints and relays the winning creative back to publishers. Creatives are provided by the demand response — no direct creative management needed.</p>
+  <div class="card">
+    <div class="card-body table-wrap">
+      <table>
+        <thead><tr><th>ID</th><th>Name</th><th>Endpoint URL</th><th>Floor</th><th>Margin</th><th>Timeout</th><th>QPS</th><th>Status</th><th>Actions</th></tr></thead>
+        <tbody id="demandEpTableBody"><tr class="loading-row"><td colspan="9"><div class="spinner"></div></td></tr></tbody>
+      </table>
+    </div>
+  </div>
+</div>
+
+<!-- ═══════════════ DEMAND VAST TAGS PAGE ═══════════════ -->
+<div class="page" id="page-demand-vast">
+  <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px">
+    <h3 style="font-size:16px">Demand VAST Tags</h3>
+    <button class="btn btn-primary" onclick="openDemandVastModal()">+ New Demand VAST Tag</button>
+  </div>
+  <p style="color:var(--fg3);font-size:13px;margin-bottom:16px">Third-party VAST tag demand sources. These are VAST URLs from ad networks or other ad servers that can be used as demand sources via VAST wrapper/redirect. Supports macros: [SLOT], [WIDTH], [HEIGHT], [CACHEBUSTER].</p>
+  <div class="card">
+    <div class="card-body table-wrap">
+      <table>
+        <thead><tr><th>ID</th><th>Name</th><th>VAST URL</th><th>Floor</th><th>Margin</th><th>Est CPM</th><th>Status</th><th>Actions</th></tr></thead>
+        <tbody id="demandVastTableBody"><tr class="loading-row"><td colspan="8"><div class="spinner"></div></td></tr></tbody>
+      </table>
+    </div>
+  </div>
+</div>
+
+<!-- ═══════════════ ADVERTISERS PAGE ═══════════════ -->
+<div class="page" id="page-advertisers">
+  <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px">
+    <h3 style="font-size:16px">Advertisers</h3>
+    <button class="btn btn-primary" onclick="openModal('advModal')">+ New Advertiser</button>
+  </div>
+  <div class="card">
+    <div class="card-body table-wrap">
+      <table>
+        <thead><tr><th>ID</th><th>Name</th><th>Company</th><th>Email</th><th>Balance</th><th>Daily Budget</th><th>Status</th><th>Actions</th></tr></thead>
+        <tbody id="advTableBody"><tr class="loading-row"><td colspan="8"><div class="spinner"></div></td></tr></tbody>
+      </table>
+    </div>
+  </div>
+</div>
+
+<!-- ═══════════════ CAMPAIGNS PAGE ═══════════════ -->
+<div class="page" id="page-campaigns">
+  <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px">
+    <h3 style="font-size:16px">Campaigns</h3>
+    <button class="btn btn-primary" onclick="openCampaignModal()">+ New Campaign</button>
+  </div>
+  <div class="card">
+    <div class="card-body table-wrap">
+      <table>
+        <thead><tr><th>ID</th><th>Campaign</th><th>Adv ID</th><th>Env</th><th>Bid</th><th>Floor</th><th>Domain</th><th>Budget/Day</th><th>Spent Today</th><th>Imps</th><th>Compl</th><th>Status</th><th>Actions</th></tr></thead>
+        <tbody id="campTableBody"><tr class="loading-row"><td colspan="13"><div class="spinner"></div></td></tr></tbody>
+      </table>
+    </div>
+  </div>
+</div>
+
+<!-- ═══════════════ TARGETING PAGE ═══════════════ -->
+<div class="page" id="page-targeting">
+  <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px">
+    <h3 style="font-size:16px">Campaign Targeting Rules</h3>
+  </div>
+  <div class="form-row" style="margin-bottom:20px">
+    <div class="form-group">
+      <label>Select Campaign</label>
+      <select id="targetCampSelect" onchange="loadTargetingRules()"><option value="">— Choose campaign —</option></select>
+    </div>
+    <div class="form-group" style="justify-content:flex-end;align-items:flex-end">
+      <button class="btn btn-primary" onclick="openTargetingModal()" id="btnAddRule" disabled>+ Add Rule</button>
+    </div>
+  </div>
+  <div class="card">
+    <div class="card-body table-wrap">
+      <table>
+        <thead><tr><th>ID</th><th>Type</th><th>Include/Exclude</th><th>Value</th><th>Actions</th></tr></thead>
+        <tbody id="targetTableBody"><tr><td colspan="5" style="text-align:center;color:var(--fg3);padding:30px">Select a campaign above</td></tr></tbody>
+      </table>
+    </div>
+  </div>
+</div>
+
+<!-- ═══════════════ ANALYTICS PAGE ═══════════════ -->
+<div class="page" id="page-analytics">
+  <h3 style="font-size:16px;margin-bottom:16px">Campaign Analytics</h3>
+  <div class="form-row" style="margin-bottom:20px">
+    <div class="form-group">
+      <label>Select Campaign</label>
+      <select id="analyticsCampSelect" onchange="loadAnalytics()"><option value="">— All Campaigns —</option></select>
+    </div>
+    <div class="form-group" style="justify-content:flex-end;align-items:flex-end">
+      <button class="btn btn-secondary btn-sm" onclick="flushStats()">⟳ Flush Stats to DB</button>
+    </div>
+  </div>
+
+  <div class="stats-grid" id="analyticsStats">
+    <div class="stat-card blue"><div class="label">Impressions</div><div class="value" id="anImps">–</div></div>
+    <div class="stat-card green"><div class="label">Completions</div><div class="value" id="anCompl">–</div></div>
+    <div class="stat-card yellow"><div class="label">Clicks</div><div class="value" id="anClicks">–</div></div>
+    <div class="stat-card accent"><div class="label">VTR</div><div class="value" id="anVtr">–</div></div>
+  </div>
+
+  <div class="tabs">
+    <div class="tab active" data-tab="today" onclick="switchAnalyticsTab('today')">Today</div>
+    <div class="tab" data-tab="budget" onclick="switchAnalyticsTab('budget')">Budget</div>
+    <div class="tab" data-tab="demand" onclick="switchAnalyticsTab('demand')">Demand Report</div>
+    <div class="tab" data-tab="supply" onclick="switchAnalyticsTab('supply')">Supply Report</div>
+    <div class="tab" data-tab="delivery" onclick="switchAnalyticsTab('delivery')">Delivery Health</div>
+    <div class="tab" data-tab="vasterrors" onclick="switchAnalyticsTab('vasterrors')">VAST Errors</div>
+  </div>
+
+  <div class="card">
+    <div class="card-body table-wrap" id="analyticsTableWrap">
+      <p style="color:var(--fg3);text-align:center;padding:20px">Select a campaign or view demand/supply reports</p>
+    </div>
+  </div>
+</div>
+
+<!-- ═══════════════ DELIVERY HEALTH PAGE ═══════════════ -->
+<div class="page" id="page-health">
+  <h3 style="font-size:16px;margin-bottom:16px">Delivery Health & VAST Monitoring</h3>
+  <div class="stats-grid" id="healthKpis">
+    <div class="stat-card green"><div class="label">Ad Start Rate</div><div class="value" id="hStartRate">–</div></div>
+    <div class="stat-card blue"><div class="label">VTR (Completion)</div><div class="value" id="hVtr">–</div></div>
+    <div class="stat-card yellow"><div class="label">Skip Rate</div><div class="value" id="hSkipRate">–</div></div>
+    <div class="stat-card" style="--val-color:var(--red)"><div class="label">Error Rate</div><div class="value" style="color:var(--red)" id="hErrorRate">–</div></div>
+    <div class="stat-card accent"><div class="label">Fill Rate</div><div class="value" id="hFillRate">–</div></div>
+    <div class="stat-card"><div class="label">No-Bid Rate</div><div class="value" style="color:var(--fg2)" id="hNoBidRate">–</div></div>
+  </div>
+  <div class="card">
+    <div class="card-header"><h3>VAST Event Funnel</h3><button class="btn btn-secondary btn-sm" onclick="loadDeliveryHealth()">↻ Refresh</button></div>
+    <div class="card-body">
+      <div id="funnelChart" style="display:flex;flex-direction:column;gap:10px"></div>
+    </div>
+  </div>
+  <div class="card">
+    <div class="card-header"><h3>Campaign Delivery Health</h3></div>
+    <div class="card-body table-wrap">
+      <table>
+        <thead><tr><th>Campaign ID</th><th>Impressions</th><th>Starts</th><th>Start Rate</th><th>Q1</th><th>Mid</th><th>Q3</th><th>Completions</th><th>VTR</th><th>Skip Rate</th><th>Error Rate</th></tr></thead>
+        <tbody id="healthTableBody"><tr class="loading-row"><td colspan="11"><div class="spinner"></div></td></tr></tbody>
+      </table>
+    </div>
+  </div>
+  <div class="card">
+    <div class="card-header"><h3>VAST Errors</h3></div>
+    <div class="card-body">
+      <div class="stats-grid" style="margin-bottom:16px">
+        <div class="stat-card"><div class="label">Total Errors</div><div class="value" style="color:var(--red)" id="hTotalErrors">0</div></div>
+        <div class="stat-card"><div class="label">Total Events</div><div class="value" id="hTotalEvents">0</div></div>
+        <div class="stat-card"><div class="label">Overall Error Rate</div><div class="value" style="color:var(--red)" id="hOverallErrorRate">0%</div></div>
+      </div>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>Campaign ID</th><th>Error Count</th></tr></thead>
+          <tbody id="vastErrorsTableBody"><tr><td colspan="2" style="text-align:center;color:var(--fg3);padding:20px">Loading...</td></tr></tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ═══════════════ SETTINGS PAGE ═══════════════ -->
+<div class="page" id="page-settings">
+  <h3 style="font-size:16px;margin-bottom:16px">Server Settings</h3>
+  <div class="card">
+    <div class="card-header"><h3>API Configuration</h3></div>
+    <div class="card-body">
+      <div class="form-row">
+        <div class="form-group full">
+          <label>API Base URL</label>
+          <input id="apiBaseUrl" value="">
+          <small style="color:var(--fg3);margin-top:4px;font-size:11px">Change this if the API is on a different host/port. Default: current origin.</small>
+        </div>
+      </div>
+      <button class="btn btn-primary" onclick="saveSettings()">Save</button>
+    </div>
+  </div>
+  <div class="card">
+    <div class="card-header"><h3>Quick Links</h3></div>
+    <div class="card-body">
+      <div style="display:flex;flex-direction:column;gap:10px">
+        <a href="/docs" target="_blank">📄 API Documentation (Swagger UI)</a>
+        <a href="/health" target="_blank">💚 Health Check</a>
+        <a href="/metrics" target="_blank">📊 Prometheus Metrics</a>
+        <a id="grafanaLink" href="http://localhost:3000" target="_blank">📈 Grafana Dashboard</a>
+      </div>
+    </div>
+  </div>
+</div>
+
+</div><!-- /content -->
+</div><!-- /main -->
+</div><!-- /app -->
+
+<!-- ═══════════════ MODALS ═══════════════ -->
+
+<!-- Supply Tag Modal -->
+<div class="modal-overlay" id="supplyTagModal">
+  <div class="modal">
+    <div class="modal-header"><h3 id="supplyTagModalTitle">New Supply Tag</h3><button class="btn-icon" onclick="closeModal('supplyTagModal')">✕</button></div>
+    <div class="modal-body">
+      <input type="hidden" id="supplyTagEditId">
+      <div class="form-row">
+        <div class="form-group"><label>Name *</label><input id="stName" placeholder="CTV Pre-Roll"></div>
+        <div class="form-group"><label>Slot ID *</label><input id="stSlotId" placeholder="ctv_preroll"></div>
+      </div>
+      <div class="form-row">
+        <div class="form-group full"><label>Description</label><textarea id="stDesc" placeholder="Supply tag description"></textarea></div>
+      </div>
+      <div class="form-row">
+        <div class="form-group"><label>Bid Floor (CPM $)</label><input id="stBidFloor" type="number" step="0.01" value="0"></div>
+        <div class="form-group"><label>Margin (%)</label><input id="stMargin" type="number" step="0.01" value="20" min="0" max="100"></div>
+      </div>
+      <div class="form-row">
+        <div class="form-group"><label>Environment</label><select id="stEnv"><option value="">Both</option><option value="1">CTV</option><option value="2">In-App</option></select></div>
+        <div class="form-group"><label>Min Duration (s)</label><input id="stMinDur" type="number" value="5"></div>
+      </div>
+      <div class="form-row">
+        <div class="form-group"><label>Max Duration (s)</label><input id="stMaxDur" type="number" value="30"></div>
+        <div class="form-group"><label>Width</label><input id="stW" type="number" value="1920"></div>
+      </div>
+      <div class="form-row">
+        <div class="form-group"><label>Height</label><input id="stH" type="number" value="1080"></div>
+      </div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-secondary" onclick="closeModal('supplyTagModal')">Cancel</button>
+      <button class="btn btn-primary" onclick="saveSupplyTag()">Save</button>
+    </div>
+  </div>
+</div>
+
+<!-- Demand Endpoint Modal -->
+<div class="modal-overlay" id="demandEpModal">
+  <div class="modal">
+    <div class="modal-header"><h3 id="demandEpModalTitle">New Demand ORTB Endpoint</h3><button class="btn-icon" onclick="closeModal('demandEpModal')">✕</button></div>
+    <div class="modal-body">
+      <input type="hidden" id="demandEpEditId">
+      <div class="form-row">
+        <div class="form-group full"><label>Name *</label><input id="deEpName" placeholder="Primary DSP"></div>
+      </div>
+      <div class="form-row">
+        <div class="form-group full"><label>Description</label><textarea id="deEpDesc" placeholder="Endpoint description"></textarea></div>
+      </div>
+      <div class="form-row">
+        <div class="form-group full"><label>Endpoint URL *</label><input id="deEpUrl" placeholder="https://dsp.example.com/ortb/bid"></div>
+      </div>
+      <div class="form-row">
+        <div class="form-group"><label>Bid Floor (CPM $)</label><input id="deEpFloor" type="number" step="0.01" value="0"></div>
+        <div class="form-group"><label>Margin (%)</label><input id="deEpMargin" type="number" step="0.01" value="15" min="0" max="100"></div>
+      </div>
+      <div class="form-row">
+        <div class="form-group"><label>Timeout (ms)</label><input id="deEpTimeout" type="number" value="500" min="50" max="10000"></div>
+        <div class="form-group"><label>QPS Limit (0=∞)</label><input id="deEpQps" type="number" value="0" min="0"></div>
+      </div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-secondary" onclick="closeModal('demandEpModal')">Cancel</button>
+      <button class="btn btn-primary" onclick="saveDemandEndpoint()">Save</button>
+    </div>
+  </div>
+</div>
+
+<!-- Demand VAST Tag Modal -->
+<div class="modal-overlay" id="demandVastModal">
+  <div class="modal">
+    <div class="modal-header"><h3 id="demandVastModalTitle">New Demand VAST Tag</h3><button class="btn-icon" onclick="closeModal('demandVastModal')">✕</button></div>
+    <div class="modal-body">
+      <input type="hidden" id="demandVastEditId">
+      <div class="form-row">
+        <div class="form-group full"><label>Name *</label><input id="dvtName" placeholder="Fallback VAST Network"></div>
+      </div>
+      <div class="form-row">
+        <div class="form-group full"><label>Description</label><textarea id="dvtDesc" placeholder="Demand VAST tag description"></textarea></div>
+      </div>
+      <div class="form-row">
+        <div class="form-group full"><label>VAST URL *</label><input id="dvtUrl" placeholder="https://vastnet.example.com/vast?s=[SLOT]&w=[WIDTH]&h=[HEIGHT]"></div>
+      </div>
+      <div class="form-row">
+        <div class="form-group"><label>Bid Floor (CPM $)</label><input id="dvtFloor" type="number" step="0.01" value="0"></div>
+        <div class="form-group"><label>Margin (%)</label><input id="dvtMargin" type="number" step="0.01" value="20" min="0" max="100"></div>
+      </div>
+      <div class="form-row">
+        <div class="form-group"><label>Est. CPM Value ($)</label><input id="dvtCpm" type="number" step="0.01" value="0"></div>
+      </div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-secondary" onclick="closeModal('demandVastModal')">Cancel</button>
+      <button class="btn btn-primary" onclick="saveDemandVastTag()">Save</button>
+    </div>
+  </div>
+</div>
+
+<!-- Mapping Modal -->
+<div class="modal-overlay" id="mappingModal">
+  <div class="modal">
+    <div class="modal-header"><h3>Add Demand Mapping</h3><button class="btn-icon" onclick="closeModal('mappingModal')">✕</button></div>
+    <div class="modal-body">
+      <div class="form-row">
+        <div class="form-group"><label>Demand Type</label>
+          <select id="mapDemandType" onchange="updateMappingDemandSelect()">
+            <option value="ortb">ORTB Endpoint</option>
+            <option value="vast">VAST Tag</option>
+          </select>
+        </div>
+        <div class="form-group"><label>Demand Source *</label>
+          <select id="mapDemandId"></select>
+        </div>
+      </div>
+      <div class="form-row">
+        <div class="form-group"><label>Priority (1=highest)</label><input id="mapPriority" type="number" value="1" min="1"></div>
+        <div class="form-group"><label>Weight</label><input id="mapWeight" type="number" value="100" min="1"></div>
+      </div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-secondary" onclick="closeModal('mappingModal')">Cancel</button>
+      <button class="btn btn-primary" onclick="saveMapping()">Save</button>
+    </div>
+  </div>
+</div>
+
+<!-- Advertiser Modal -->
+<div class="modal-overlay" id="advModal">
+  <div class="modal">
+    <div class="modal-header"><h3 id="advModalTitle">New Advertiser</h3><button class="btn-icon" onclick="closeModal('advModal')">✕</button></div>
+    <div class="modal-body">
+      <input type="hidden" id="advEditId">
+      <div class="form-row">
+        <div class="form-group"><label>Name *</label><input id="advName" placeholder="Advertiser name"></div>
+        <div class="form-group"><label>Company</label><input id="advCompany" placeholder="Company"></div>
+      </div>
+      <div class="form-row">
+        <div class="form-group"><label>Email</label><input id="advEmail" type="email" placeholder="contact@example.com"></div>
+        <div class="form-group"><label>Balance ($)</label><input id="advBalance" type="number" step="0.01" value="0"></div>
+      </div>
+      <div class="form-row">
+        <div class="form-group"><label>Daily Budget ($)</label><input id="advDailyBudget" type="number" step="0.01" value="0"></div>
+      </div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-secondary" onclick="closeModal('advModal')">Cancel</button>
+      <button class="btn btn-primary" onclick="saveAdvertiser()">Save</button>
+    </div>
+  </div>
+</div>
+
+<!-- Campaign Modal -->
+<div class="modal-overlay" id="campModal">
+  <div class="modal">
+    <div class="modal-header"><h3 id="campModalTitle">New Campaign</h3><button class="btn-icon" onclick="closeModal('campModal')">✕</button></div>
+    <div class="modal-body">
+      <input type="hidden" id="campEditId">
+      <div class="form-row">
+        <div class="form-group"><label>Advertiser *</label><select id="campAdvId"></select></div>
+        <div class="form-group"><label>Name *</label><input id="campName" placeholder="Campaign name"></div>
+      </div>
+      <div class="form-row">
+        <div class="form-group full"><label>Description</label><textarea id="campDesc" placeholder="Campaign description"></textarea></div>
+      </div>
+      <div class="form-row">
+        <div class="form-group"><label>Bid Amount (CPM) *</label><input id="campBid" type="number" step="0.01" value="5.00"></div>
+        <div class="form-group"><label>Environment</label><select id="campEnv"><option value="">Both</option><option value="1">CTV</option><option value="2">In-App</option></select></div>
+      </div>
+      <div class="form-row">
+        <div class="form-group"><label>Bid Floor (CPM)</label><input id="campBidFloor" type="number" step="0.01" value="0"></div>
+        <div class="form-group"><label>Advertiser Domain</label><input id="campAdomain" placeholder="brand.com"></div>
+      </div>
+      <div class="form-row">
+        <div class="form-group full"><label>IAB Categories</label><input id="campIabCats" placeholder="IAB1-1, IAB3-2 (comma-separated)"></div>
+      </div>
+      <div class="form-row">
+        <div class="form-group full"><label>Floor Config (JSON)</label><textarea id="campFloorConfig" placeholder='{"geo":{"US":5.0,"GB":4.0},"daypart":{"prime":8.0}}' style="min-height:50px"></textarea></div>
+      </div>
+      <div class="form-row">
+        <div class="form-group"><label>Daily Budget ($)</label><input id="campBudgetDaily" type="number" step="0.01" value="100"></div>
+        <div class="form-group"><label>Total Budget ($)</label><input id="campBudgetTotal" type="number" step="0.01" value="10000"></div>
+      </div>
+      <div class="form-row">
+        <div class="form-group"><label>Freq Cap (Hourly)</label><input id="campFreqH" type="number" value="3"></div>
+        <div class="form-group"><label>Freq Cap (Daily)</label><input id="campFreqD" type="number" value="10"></div>
+      </div>
+      <div class="form-row">
+        <div class="form-group"><label>Start Time</label><input id="campStart" type="datetime-local"></div>
+        <div class="form-group"><label>End Time</label><input id="campEnd" type="datetime-local"></div>
+      </div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-secondary" onclick="closeModal('campModal')">Cancel</button>
+      <button class="btn btn-primary" onclick="saveCampaign()">Save</button>
+    </div>
+  </div>
+</div>
+
+<!-- Targeting Rule Modal -->
+<div class="modal-overlay" id="targetModal">
+  <div class="modal">
+    <div class="modal-header"><h3>Add Targeting Rule</h3><button class="btn-icon" onclick="closeModal('targetModal')">✕</button></div>
+    <div class="modal-body">
+      <div class="form-row">
+        <div class="form-group"><label>Rule Type *</label>
+          <select id="targetType" onchange="updateRuleValueHint()">
+            <option value="geo">Geo (countries)</option>
+            <option value="device">Device type</option>
+            <option value="app_bundle">App Bundle</option>
+            <option value="content_genre">Content Genre</option>
+            <option value="environment">Environment</option>
+            <option value="daypart">Daypart (hours)</option>
+          </select>
+        </div>
+        <div class="form-group"><label>Include / Exclude</label>
+          <select id="targetInclude"><option value="true">Include</option><option value="false">Exclude</option></select>
+        </div>
+      </div>
+      <div class="form-row">
+        <div class="form-group full">
+          <label>Rule Value (JSON) *</label>
+          <textarea id="targetValue" placeholder='{"countries": ["US", "GB"]}'></textarea>
+          <small style="color:var(--fg3);font-size:11px;margin-top:4px" id="targetHint">e.g. {"countries": ["US", "CA", "GB"]}</small>
+        </div>
+      </div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-secondary" onclick="closeModal('targetModal')">Cancel</button>
+      <button class="btn btn-primary" onclick="saveTargetingRule()">Save</button>
+    </div>
+  </div>
+</div>
+
+<!-- Toast Container -->
+<div class="toast-container" id="toastContainer"></div>
+
+<script>
+// ═════════════════════════════════════════════════════════════
+// CONFIG & STATE
+// ═════════════════════════════════════════════════════════════
+let API_BASE = localStorage.getItem('liteads_api_base') || window.location.origin;
+let advertisersCache = [];
+let campaignsCache = [];
+let supplyTagsCache = [];
+let demandEpCache = [];
+let demandVastCache = [];
+
+const SD_API = '/api/v1/supply-demand';
+const STATUS_MAP = {0:'Inactive',1:'Active',2:'Paused',3:'Deleted'};
+const STATUS_CLASS = {0:'badge-inactive',1:'badge-active',2:'badge-paused',3:'badge-deleted'};
+const ENV_MAP = {1:'CTV',2:'In-App',null:'Both',undefined:'Both','':'Both'};
+const RULE_HINTS = {
+  geo:'e.g. {"countries": ["US", "CA", "GB"]}',
+  device:'e.g. {"types": ["ctv", "mobile", "tablet"]}',
+  app_bundle:'e.g. {"bundles": ["com.roku.app1"]}',
+  content_genre:'e.g. {"genres": ["news", "sports"]}',
+  environment:'e.g. {"env": "ctv"} or {"env": "inapp"}',
+  daypart:'e.g. {"hours": [8,9,10,11,12,18,19,20]}',
+};
+
+// ═════════════════════════════════════════════════════════════
+// API HELPERS
+// ═════════════════════════════════════════════════════════════
+async function api(path, opts = {}) {
+  const url = `${API_BASE}${path}`;
+  const config = {headers:{'Content-Type':'application/json',...opts.headers},...opts};
+  if (opts.body && typeof opts.body === 'object') config.body = JSON.stringify(opts.body);
+  try {
+    const res = await fetch(url, config);
+    if (res.status === 204) return null;
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.message || data.detail || `HTTP ${res.status}`);
+    return data;
+  } catch(err) {
+    toast(err.message || 'API request failed','error');
+    throw err;
+  }
+}
+
+function $(id){return document.getElementById(id)}
+function $val(id){return $(id).value}
+function $setVal(id,v){$(id).value=v??''}
+
+// ═════════════════════════════════════════════════════════════
+// NAVIGATION
+// ═════════════════════════════════════════════════════════════
+function showPage(name){
+  document.querySelectorAll('.page').forEach(p=>p.classList.remove('active'));
+  document.querySelectorAll('.nav-item').forEach(n=>n.classList.remove('active'));
+  $(`page-${name}`).classList.add('active');
+  document.querySelector(`.nav-item[data-page="${name}"]`).classList.add('active');
+  const titles={'dashboard':'Dashboard','supply-tags':'Supply VAST Tags','demand-ortb':'Demand ORTB Endpoints','demand-vast':'Demand VAST Tags','advertisers':'Advertisers','campaigns':'Campaigns','targeting':'Targeting Rules','analytics':'Analytics','health':'Delivery Health','settings':'Settings'};
+  $('pageTitle').textContent=titles[name]||name;
+  switch(name){
+    case 'dashboard':loadDashboard();break;
+    case 'supply-tags':loadSupplyTags();break;
+    case 'demand-ortb':loadDemandEndpoints();break;
+    case 'demand-vast':loadDemandVastTags();break;
+    case 'advertisers':loadAdvertisers();break;
+    case 'campaigns':loadCampaigns();break;
+    case 'targeting':loadCampaignDropdowns();break;
+    case 'analytics':loadCampaignDropdowns();break;
+    case 'health':loadDeliveryHealth();break;
+  }
+}
+
+function refreshCurrentPage(){
+  const active=document.querySelector('.nav-item.active');
+  if(active) showPage(active.dataset.page);
+}
+
+// ═════════════════════════════════════════════════════════════
+// TOAST & MODAL
+// ═════════════════════════════════════════════════════════════
+function toast(msg,type='success'){
+  const el=document.createElement('div');
+  el.className=`toast toast-${type}`;el.textContent=msg;
+  $('toastContainer').appendChild(el);setTimeout(()=>el.remove(),4000);
+}
+function openModal(id){$(id).classList.add('active')}
+function closeModal(id){$(id).classList.remove('active')}
+function fmtMoney(n){return '$'+Number(n||0).toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:2})}
+function fmtNum(n){return Number(n||0).toLocaleString('en-US')}
+function badge(status){return `<span class="badge ${STATUS_CLASS[status]||'badge-inactive'}">${STATUS_MAP[status]||'Unknown'}</span>`}
+function esc(s){const d=document.createElement('div');d.textContent=s||'';return d.innerHTML}
+function truncUrl(u,max=40){return u&&u.length>max?u.substring(0,max)+'...':u||''}
+function copyText(elId){navigator.clipboard.writeText($(elId).textContent).then(()=>toast('Copied to clipboard'),()=>toast('Failed to copy','error'))}
+
+// ═════════════════════════════════════════════════════════════
+// DASHBOARD
+// ═════════════════════════════════════════════════════════════
+async function loadDashboard(){
+  try{
+    const [camps,sTags,dEps,dVasts]=await Promise.all([
+      api('/api/v1/admin/campaigns'),
+      api(`${SD_API}/supply-tags`),
+      api(`${SD_API}/demand-endpoints`),
+      api(`${SD_API}/demand-vast-tags`),
+    ]);
+    campaignsCache=camps; supplyTagsCache=sTags; demandEpCache=dEps; demandVastCache=dVasts;
+
+    const activeCamps=camps.filter(c=>c.status===1).length;
+    const totalImps=camps.reduce((s,c)=>s+(c.impressions||0),0);
+    const totalCompl=camps.reduce((s,c)=>s+(c.completions||0),0);
+    const activeSupply=sTags.filter(t=>t.status===1).length;
+    const activeDemand=dEps.filter(e=>e.status===1).length+dVasts.filter(v=>v.status===1).length;
+
+    $('statSupply').textContent=fmtNum(activeSupply);
+    $('statDemand').textContent=fmtNum(activeDemand);
+    $('statCamps').textContent=fmtNum(activeCamps);
+    $('statImps').textContent=fmtNum(totalImps);
+    $('statVtr').textContent=totalImps>0?((totalCompl/totalImps)*100).toFixed(1)+'%':'—';
+
+    try{const h=await api('/api/v1/analytics/reports/delivery-health');$('statFillRate').textContent=(h?.aggregate?.fill_rate||0)+'%'}catch(e){$('statFillRate').textContent='—'}
+
+    // Supply tags summary
+    $('dashSupplyTags').innerHTML=sTags.length?sTags.slice(0,5).map(t=>`<tr>
+      <td><code>${esc(t.slot_id)}</code></td><td>${esc(t.name)}</td>
+      <td>${fmtMoney(t.bid_floor)}</td><td>${t.margin_pct}%</td>
+      <td>${t.demand_count||0}</td><td>${badge(t.status)}</td>
+    </tr>`).join(''):'<tr><td colspan="6" style="text-align:center;color:var(--fg3);padding:20px">No supply tags</td></tr>';
+
+    // Demand sources summary
+    const dRows=[...dEps.map(e=>({name:e.name,type:'ORTB',floor:e.bid_floor,margin:e.margin_pct,status:e.status})),
+                  ...dVasts.map(v=>({name:v.name,type:'VAST',floor:v.bid_floor,margin:v.margin_pct,status:v.status}))];
+    $('dashDemandSources').innerHTML=dRows.length?dRows.slice(0,5).map(r=>`<tr>
+      <td>${esc(r.name)}</td><td><span class="badge badge-${r.type.toLowerCase()}">${r.type}</span></td>
+      <td>${fmtMoney(r.floor)}</td><td>${r.margin}%</td><td>${badge(r.status)}</td>
+    </tr>`).join(''):'<tr><td colspan="5" style="text-align:center;color:var(--fg3);padding:20px">No demand sources</td></tr>';
+
+    // Campaigns
+    const recent=camps.slice(0,10);
+    $('dashCampaigns').innerHTML=recent.length?recent.map(c=>`<tr>
+      <td>${c.id}</td><td><strong>${esc(c.name)}</strong></td><td>${c.advertiser_id}</td>
+      <td>${badge(c.status)}</td><td>${fmtMoney(c.budget_daily)}/day</td><td>${fmtMoney(c.spent_today)}</td>
+      <td>${fmtNum(c.impressions)}</td><td>${fmtNum(c.clicks)}</td>
+    </tr>`).join(''):'<tr><td colspan="8" style="text-align:center;color:var(--fg3);padding:30px">No campaigns yet</td></tr>';
+
+    $('lastUpdated').textContent='Updated '+new Date().toLocaleTimeString();
+  }catch(e){}
+}
+
+// ═════════════════════════════════════════════════════════════
+// SUPPLY TAGS
+// ═════════════════════════════════════════════════════════════
+async function loadSupplyTags(){
+  try{
+    const data=await api(`${SD_API}/supply-tags`);
+    supplyTagsCache=data;
+    $('supplyTableBody').innerHTML=data.length?data.map(t=>`<tr>
+      <td>${t.id}</td><td><strong>${esc(t.name)}</strong></td><td><code>${esc(t.slot_id)}</code></td>
+      <td>${ENV_MAP[t.environment]||'Both'}</td><td>${fmtMoney(t.bid_floor)}</td><td>${t.margin_pct}%</td>
+      <td>${t.min_duration}-${t.max_duration}s</td><td>${t.width}x${t.height}</td>
+      <td>${t.demand_count||0}</td><td>${badge(t.status)}</td>
+      <td>
+        <button class="btn btn-secondary btn-sm" onclick="editSupplyTag(${t.id})">Edit</button>
+        <button class="btn btn-sm" style="background:var(--green);color:#fff" onclick="showSupplyVastUrl(${t.id})">Tag URL</button>
+        ${t.status!==3?`<button class="btn btn-danger btn-sm" onclick="deleteSupplyTag(${t.id})">Del</button>`:''}
+      </td>
+    </tr>`).join(''):'<tr><td colspan="11" class="empty">No supply tags. Click "+ New Supply Tag" to create one.</td></tr>';
+
+    // Populate mapping dropdown
+    const sel=$('mappingSupplySelect');
+    const curVal=sel.value;
+    sel.innerHTML='<option value="">— Choose supply tag —</option>'+data.filter(t=>t.status!==3).map(t=>`<option value="${t.id}">${t.name} (${t.slot_id})</option>`).join('');
+    sel.value=curVal;
+  }catch(e){}
+}
+
+function openSupplyTagModal(){
+  clearSupplyTagForm();
+  openModal('supplyTagModal');
+}
+
+async function editSupplyTag(id){
+  try{
+    const t=await api(`${SD_API}/supply-tags/${id}`);
+    $('supplyTagModalTitle').textContent='Edit Supply Tag';
+    $setVal('supplyTagEditId',id);
+    $setVal('stName',t.name);$setVal('stSlotId',t.slot_id);$setVal('stDesc',t.description);
+    $setVal('stBidFloor',t.bid_floor);$setVal('stMargin',t.margin_pct);
+    $setVal('stEnv',t.environment??'');$setVal('stMinDur',t.min_duration);
+    $setVal('stMaxDur',t.max_duration);$setVal('stW',t.width);$setVal('stH',t.height);
+    openModal('supplyTagModal');
+  }catch(e){}
+}
+
+async function saveSupplyTag(){
+  const id=$val('supplyTagEditId');
+  const body={
+    name:$val('stName'),slot_id:$val('stSlotId'),description:$val('stDesc')||null,
+    bid_floor:parseFloat($val('stBidFloor'))||0,margin_pct:parseFloat($val('stMargin'))||0,
+    environment:$val('stEnv')?parseInt($val('stEnv')):null,
+    min_duration:parseInt($val('stMinDur'))||5,max_duration:parseInt($val('stMaxDur'))||30,
+    width:parseInt($val('stW'))||1920,height:parseInt($val('stH'))||1080,
+  };
+  if(!body.name||!body.slot_id) return toast('Name and Slot ID are required','error');
+  try{
+    if(id){
+      await api(`${SD_API}/supply-tags/${id}`,{method:'PUT',body});
+      toast('Supply tag updated');
+    }else{
+      await api(`${SD_API}/supply-tags`,{method:'POST',body});
+      toast('Supply tag created');
+    }
+    closeModal('supplyTagModal');clearSupplyTagForm();loadSupplyTags();
+  }catch(e){}
+}
+
+async function deleteSupplyTag(id){
+  if(!confirm('Delete this supply tag?')) return;
+  try{await api(`${SD_API}/supply-tags/${id}`,{method:'DELETE'});toast('Supply tag deleted');loadSupplyTags();}catch(e){}
+}
+
+function showSupplyVastUrl(id){
+  const t=supplyTagsCache.find(s=>s.id===id);
+  if(!t) return;
+  const url=`${API_BASE}/api/vast?sid=${encodeURIComponent(t.slot_id)}&w=${t.width}&h=${t.height}&min_dur=${t.min_duration}&max_dur=${t.max_duration}&ip=[IP]&ua=[UA]&ifa=[IFA]&dnt=[DNT]&os=[OS]&device_make=[MAKE]&device_model=[MODEL]&cb=[CACHEBUSTER]`;
+  $('supplyVastUrl').textContent=url;
+  $('supplyVastUrlCard').style.display='block';
+  $('supplyVastUrlCard').scrollIntoView({behavior:'smooth'});
+}
+
+function clearSupplyTagForm(){
+  $('supplyTagModalTitle').textContent='New Supply Tag';
+  $setVal('supplyTagEditId','');$setVal('stName','');$setVal('stSlotId','');$setVal('stDesc','');
+  $setVal('stBidFloor','0');$setVal('stMargin','20');$setVal('stEnv','');
+  $setVal('stMinDur','5');$setVal('stMaxDur','30');$setVal('stW','1920');$setVal('stH','1080');
+}
+
+// ═════════════════════════════════════════════════════════════
+// SUPPLY → DEMAND MAPPINGS
+// ═════════════════════════════════════════════════════════════
+async function loadMappings(){
+  const tagId=$val('mappingSupplySelect');
+  $('btnAddMapping').disabled=!tagId;
+  if(!tagId){
+    $('mappingTableBody').innerHTML='<tr><td colspan="7" style="text-align:center;color:var(--fg3);padding:30px">Select a supply tag above</td></tr>';
+    return;
+  }
+  try{
+    const data=await api(`${SD_API}/mappings?supply_tag_id=${tagId}`);
+    $('mappingTableBody').innerHTML=data.length?data.map(m=>`<tr>
+      <td>${m.id}</td><td><strong>${esc(m.demand_name)}</strong></td>
+      <td><span class="badge badge-${m.demand_type.toLowerCase()}">${m.demand_type}</span></td>
+      <td>${m.priority}</td><td>${m.weight}</td><td>${badge(m.status)}</td>
+      <td><button class="btn btn-danger btn-sm" onclick="deleteMapping(${m.id})">Remove</button></td>
+    </tr>`).join(''):'<tr><td colspan="7" style="text-align:center;color:var(--fg3);padding:30px">No demand mappings for this supply tag</td></tr>';
+  }catch(e){}
+}
+
+function openMappingModal(){
+  updateMappingDemandSelect();
+  $setVal('mapPriority','1');$setVal('mapWeight','100');
+  openModal('mappingModal');
+}
+
+async function updateMappingDemandSelect(){
+  const type=$val('mapDemandType');
+  const sel=$('mapDemandId');
+  if(type==='ortb'){
+    if(!demandEpCache.length) try{demandEpCache=await api(`${SD_API}/demand-endpoints`)}catch(e){}
+    sel.innerHTML=demandEpCache.filter(e=>e.status!==3).map(e=>`<option value="${e.id}">${e.name}</option>`).join('');
+  }else{
+    if(!demandVastCache.length) try{demandVastCache=await api(`${SD_API}/demand-vast-tags`)}catch(e){}
+    sel.innerHTML=demandVastCache.filter(v=>v.status!==3).map(v=>`<option value="${v.id}">${v.name}</option>`).join('');
+  }
+}
+
+async function saveMapping(){
+  const tagId=$val('mappingSupplySelect');
+  if(!tagId) return toast('Select a supply tag first','error');
+  const type=$val('mapDemandType');
+  const body={
+    supply_tag_id:parseInt(tagId),
+    demand_endpoint_id:type==='ortb'?parseInt($val('mapDemandId')):null,
+    demand_vast_tag_id:type==='vast'?parseInt($val('mapDemandId')):null,
+    priority:parseInt($val('mapPriority'))||1,
+    weight:parseInt($val('mapWeight'))||100,
+  };
+  try{
+    await api(`${SD_API}/mappings`,{method:'POST',body});
+    toast('Mapping created');closeModal('mappingModal');loadMappings();
+  }catch(e){}
+}
+
+async function deleteMapping(id){
+  if(!confirm('Remove this demand mapping?')) return;
+  try{await api(`${SD_API}/mappings/${id}`,{method:'DELETE'});toast('Mapping removed');loadMappings();}catch(e){}
+}
+
+// ═════════════════════════════════════════════════════════════
+// DEMAND ORTB ENDPOINTS
+// ═════════════════════════════════════════════════════════════
+async function loadDemandEndpoints(){
+  try{
+    const data=await api(`${SD_API}/demand-endpoints`);
+    demandEpCache=data;
+    $('demandEpTableBody').innerHTML=data.length?data.map(e=>`<tr>
+      <td>${e.id}</td><td><strong>${esc(e.name)}</strong></td>
+      <td><a href="${esc(e.endpoint_url)}" target="_blank" title="${esc(e.endpoint_url)}">${truncUrl(e.endpoint_url)}</a></td>
+      <td>${fmtMoney(e.bid_floor)}</td><td>${e.margin_pct}%</td>
+      <td>${e.timeout_ms}ms</td><td>${e.qps_limit||'∞'}</td>
+      <td>${badge(e.status)}</td>
+      <td>
+        <button class="btn btn-secondary btn-sm" onclick="editDemandEndpoint(${e.id})">Edit</button>
+        ${e.status!==3?`<button class="btn btn-danger btn-sm" onclick="deleteDemandEndpoint(${e.id})">Del</button>`:''}
+      </td>
+    </tr>`).join(''):'<tr><td colspan="9" class="empty">No demand endpoints. Click "+ New Endpoint" to add one.</td></tr>';
+  }catch(e){}
+}
+
+function openDemandEpModal(){clearDemandEpForm();openModal('demandEpModal')}
+
+async function editDemandEndpoint(id){
+  try{
+    const e=await api(`${SD_API}/demand-endpoints/${id}`);
+    $('demandEpModalTitle').textContent='Edit Demand Endpoint';
+    $setVal('demandEpEditId',id);$setVal('deEpName',e.name);$setVal('deEpDesc',e.description);
+    $setVal('deEpUrl',e.endpoint_url);$setVal('deEpFloor',e.bid_floor);
+    $setVal('deEpMargin',e.margin_pct);$setVal('deEpTimeout',e.timeout_ms);$setVal('deEpQps',e.qps_limit);
+    openModal('demandEpModal');
+  }catch(e){}
+}
+
+async function saveDemandEndpoint(){
+  const id=$val('demandEpEditId');
+  const body={
+    name:$val('deEpName'),description:$val('deEpDesc')||null,endpoint_url:$val('deEpUrl'),
+    bid_floor:parseFloat($val('deEpFloor'))||0,margin_pct:parseFloat($val('deEpMargin'))||0,
+    timeout_ms:parseInt($val('deEpTimeout'))||500,qps_limit:parseInt($val('deEpQps'))||0,
+  };
+  if(!body.name||!body.endpoint_url) return toast('Name and URL are required','error');
+  try{
+    if(id){
+      await api(`${SD_API}/demand-endpoints/${id}`,{method:'PUT',body});
+      toast('Demand endpoint updated');
+    }else{
+      await api(`${SD_API}/demand-endpoints`,{method:'POST',body});
+      toast('Demand endpoint created');
+    }
+    closeModal('demandEpModal');clearDemandEpForm();loadDemandEndpoints();
+  }catch(e){}
+}
+
+async function deleteDemandEndpoint(id){
+  if(!confirm('Delete this demand endpoint?')) return;
+  try{await api(`${SD_API}/demand-endpoints/${id}`,{method:'DELETE'});toast('Endpoint deleted');loadDemandEndpoints();}catch(e){}
+}
+
+function clearDemandEpForm(){
+  $('demandEpModalTitle').textContent='New Demand ORTB Endpoint';
+  $setVal('demandEpEditId','');$setVal('deEpName','');$setVal('deEpDesc','');$setVal('deEpUrl','');
+  $setVal('deEpFloor','0');$setVal('deEpMargin','15');$setVal('deEpTimeout','500');$setVal('deEpQps','0');
+}
+
+// ═════════════════════════════════════════════════════════════
+// DEMAND VAST TAGS
+// ═════════════════════════════════════════════════════════════
+async function loadDemandVastTags(){
+  try{
+    const data=await api(`${SD_API}/demand-vast-tags`);
+    demandVastCache=data;
+    $('demandVastTableBody').innerHTML=data.length?data.map(v=>`<tr>
+      <td>${v.id}</td><td><strong>${esc(v.name)}</strong></td>
+      <td><a href="${esc(v.vast_url)}" target="_blank" title="${esc(v.vast_url)}">${truncUrl(v.vast_url,50)}</a></td>
+      <td>${fmtMoney(v.bid_floor)}</td><td>${v.margin_pct}%</td>
+      <td>${fmtMoney(v.cpm_value)}</td>
+      <td>${badge(v.status)}</td>
+      <td>
+        <button class="btn btn-secondary btn-sm" onclick="editDemandVastTag(${v.id})">Edit</button>
+        ${v.status!==3?`<button class="btn btn-danger btn-sm" onclick="deleteDemandVastTag(${v.id})">Del</button>`:''}
+      </td>
+    </tr>`).join(''):'<tr><td colspan="8" class="empty">No demand VAST tags. Click "+ New Demand VAST Tag" to add one.</td></tr>';
+  }catch(e){}
+}
+
+function openDemandVastModal(){clearDemandVastForm();openModal('demandVastModal')}
+
+async function editDemandVastTag(id){
+  try{
+    const v=await api(`${SD_API}/demand-vast-tags/${id}`);
+    $('demandVastModalTitle').textContent='Edit Demand VAST Tag';
+    $setVal('demandVastEditId',id);$setVal('dvtName',v.name);$setVal('dvtDesc',v.description);
+    $setVal('dvtUrl',v.vast_url);$setVal('dvtFloor',v.bid_floor);
+    $setVal('dvtMargin',v.margin_pct);$setVal('dvtCpm',v.cpm_value);
+    openModal('demandVastModal');
+  }catch(e){}
+}
+
+async function saveDemandVastTag(){
+  const id=$val('demandVastEditId');
+  const body={
+    name:$val('dvtName'),description:$val('dvtDesc')||null,vast_url:$val('dvtUrl'),
+    bid_floor:parseFloat($val('dvtFloor'))||0,margin_pct:parseFloat($val('dvtMargin'))||0,
+    cpm_value:parseFloat($val('dvtCpm'))||0,
+  };
+  if(!body.name||!body.vast_url) return toast('Name and URL are required','error');
+  try{
+    if(id){
+      await api(`${SD_API}/demand-vast-tags/${id}`,{method:'PUT',body});
+      toast('Demand VAST tag updated');
+    }else{
+      await api(`${SD_API}/demand-vast-tags`,{method:'POST',body});
+      toast('Demand VAST tag created');
+    }
+    closeModal('demandVastModal');clearDemandVastForm();loadDemandVastTags();
+  }catch(e){}
+}
+
+async function deleteDemandVastTag(id){
+  if(!confirm('Delete this demand VAST tag?')) return;
+  try{await api(`${SD_API}/demand-vast-tags/${id}`,{method:'DELETE'});toast('Demand VAST tag deleted');loadDemandVastTags();}catch(e){}
+}
+
+function clearDemandVastForm(){
+  $('demandVastModalTitle').textContent='New Demand VAST Tag';
+  $setVal('demandVastEditId','');$setVal('dvtName','');$setVal('dvtDesc','');$setVal('dvtUrl','');
+  $setVal('dvtFloor','0');$setVal('dvtMargin','20');$setVal('dvtCpm','0');
+}
+
+// ═════════════════════════════════════════════════════════════
+// ADVERTISERS
+// ═════════════════════════════════════════════════════════════
+async function loadAdvertisers(){
+  try{
+    const data=await api('/api/v1/admin/advertisers');
+    advertisersCache=data;
+    $('advTableBody').innerHTML=data.length?data.map(a=>`<tr>
+      <td>${a.id}</td><td><strong>${esc(a.name)}</strong></td><td>${esc(a.company||'—')}</td>
+      <td>${esc(a.contact_email||'—')}</td><td>${fmtMoney(a.balance)}</td><td>${fmtMoney(a.daily_budget)}</td>
+      <td>${badge(a.status)}</td>
+      <td>
+        <button class="btn btn-secondary btn-sm" onclick="editAdvertiser(${a.id})">Edit</button>
+        ${a.status!==3?`<button class="btn btn-danger btn-sm" onclick="deleteAdvertiser(${a.id})">Del</button>`:''}
+      </td>
+    </tr>`).join(''):'<tr><td colspan="8" class="empty">No advertisers yet</td></tr>';
+  }catch(e){}
+}
+
+async function editAdvertiser(id){
+  try{
+    const a=await api(`/api/v1/admin/advertisers/${id}`);
+    $('advModalTitle').textContent='Edit Advertiser';
+    $setVal('advEditId',id);$setVal('advName',a.name);$setVal('advCompany',a.company);
+    $setVal('advEmail',a.contact_email);$setVal('advBalance',a.balance);$setVal('advDailyBudget',a.daily_budget);
+    openModal('advModal');
+  }catch(e){}
+}
+
+async function saveAdvertiser(){
+  const id=$val('advEditId');
+  const body={name:$val('advName'),company:$val('advCompany')||null,contact_email:$val('advEmail')||null,balance:parseFloat($val('advBalance'))||0,daily_budget:parseFloat($val('advDailyBudget'))||0};
+  if(!body.name) return toast('Name is required','error');
+  try{
+    if(id){await api(`/api/v1/admin/advertisers/${id}`,{method:'PUT',body});toast('Advertiser updated')}
+    else{await api('/api/v1/admin/advertisers',{method:'POST',body});toast('Advertiser created')}
+    closeModal('advModal');clearAdvForm();loadAdvertisers();
+  }catch(e){}
+}
+
+async function deleteAdvertiser(id){
+  if(!confirm('Delete this advertiser?')) return;
+  try{await api(`/api/v1/admin/advertisers/${id}`,{method:'DELETE'});toast('Advertiser deleted');loadAdvertisers();}catch(e){}
+}
+
+function clearAdvForm(){
+  $setVal('advEditId','');$setVal('advName','');$setVal('advCompany','');
+  $setVal('advEmail','');$setVal('advBalance','0');$setVal('advDailyBudget','0');
+  $('advModalTitle').textContent='New Advertiser';
+}
+
+// ═════════════════════════════════════════════════════════════
+// CAMPAIGNS
+// ═════════════════════════════════════════════════════════════
+async function loadCampaigns(){
+  try{
+    const data=await api('/api/v1/admin/campaigns');
+    campaignsCache=data;
+    $('campTableBody').innerHTML=data.length?data.map(c=>`<tr>
+      <td>${c.id}</td><td><strong>${esc(c.name)}</strong></td><td>${c.advertiser_id}</td>
+      <td>${ENV_MAP[c.environment]||'Both'}</td><td>${fmtMoney(c.bid_amount)}</td>
+      <td>${c.bid_floor?fmtMoney(c.bid_floor):'—'}</td><td>${esc(c.adomain||'—')}</td>
+      <td>${fmtMoney(c.budget_daily)}</td><td>${fmtMoney(c.spent_today)}</td>
+      <td>${fmtNum(c.impressions)}</td><td>${fmtNum(c.completions)}</td><td>${badge(c.status)}</td>
+      <td>
+        <button class="btn btn-secondary btn-sm" onclick="editCampaign(${c.id})">Edit</button>
+        <button class="btn btn-sm" style="background:var(--yellow);color:#000" onclick="toggleCampaignStatus(${c.id},${c.status})">${c.status===1?'Pause':'Resume'}</button>
+        ${c.status!==3?`<button class="btn btn-danger btn-sm" onclick="deleteCampaign(${c.id})">Del</button>`:''}
+      </td>
+    </tr>`).join(''):'<tr><td colspan="13" class="empty">No campaigns yet</td></tr>';
+  }catch(e){}
+}
+
+async function openCampaignModal(){clearCampForm();await populateAdvDropdown('campAdvId');openModal('campModal')}
+
+async function editCampaign(id){
+  try{
+    const c=await api(`/api/v1/admin/campaigns/${id}`);
+    await populateAdvDropdown('campAdvId');
+    $('campModalTitle').textContent='Edit Campaign';
+    $setVal('campEditId',id);$setVal('campAdvId',c.advertiser_id);$setVal('campName',c.name);
+    $setVal('campDesc',c.description);$setVal('campBid',c.bid_amount);$setVal('campEnv',c.environment??'');
+    $setVal('campBidFloor',c.bid_floor||0);$setVal('campAdomain',c.adomain||'');
+    $setVal('campIabCats',(c.iab_categories||[]).join(', '));
+    $setVal('campFloorConfig',c.floor_config?JSON.stringify(c.floor_config,null,2):'');
+    $setVal('campBudgetDaily',c.budget_daily);$setVal('campBudgetTotal',c.budget_total);
+    $setVal('campFreqH',c.freq_cap_hourly);$setVal('campFreqD',c.freq_cap_daily);
+    if(c.start_time) $setVal('campStart',c.start_time.substring(0,16));
+    if(c.end_time) $setVal('campEnd',c.end_time.substring(0,16));
+    openModal('campModal');
+  }catch(e){}
+}
+
+async function saveCampaign(){
+  const id=$val('campEditId');
+  let floorConfig=null;
+  const fcVal=$val('campFloorConfig').trim();
+  if(fcVal){try{floorConfig=JSON.parse(fcVal)}catch(e){return toast('Floor Config must be valid JSON','error')}}
+  const iabStr=$val('campIabCats').trim();
+  const iabCats=iabStr?iabStr.split(',').map(s=>s.trim()).filter(Boolean):null;
+  const body={
+    advertiser_id:parseInt($val('campAdvId')),name:$val('campName'),description:$val('campDesc')||null,
+    bid_amount:parseFloat($val('campBid')),bid_floor:parseFloat($val('campBidFloor'))||0,
+    adomain:$val('campAdomain')||null,iab_categories:iabCats,floor_config:floorConfig,
+    environment:$val('campEnv')?parseInt($val('campEnv')):null,
+    budget_daily:parseFloat($val('campBudgetDaily'))||0,budget_total:parseFloat($val('campBudgetTotal'))||0,
+    freq_cap_hourly:parseInt($val('campFreqH'))||3,freq_cap_daily:parseInt($val('campFreqD'))||10,
+    start_time:$val('campStart')||null,end_time:$val('campEnd')||null,
+  };
+  if(!body.name||!body.bid_amount) return toast('Name and Bid are required','error');
+  try{
+    if(id){delete body.advertiser_id;await api(`/api/v1/admin/campaigns/${id}`,{method:'PUT',body});toast('Campaign updated')}
+    else{await api('/api/v1/admin/campaigns',{method:'POST',body});toast('Campaign created')}
+    closeModal('campModal');clearCampForm();loadCampaigns();
+  }catch(e){}
+}
+
+async function toggleCampaignStatus(id,cs){
+  const ns=cs===1?2:1;
+  try{await api(`/api/v1/admin/campaigns/${id}/status`,{method:'PATCH',body:{status:ns}});toast(`Campaign ${ns===1?'resumed':'paused'}`);loadCampaigns();}catch(e){}
+}
+
+async function deleteCampaign(id){
+  if(!confirm('Delete this campaign?')) return;
+  try{await api(`/api/v1/admin/campaigns/${id}`,{method:'DELETE'});toast('Campaign deleted');loadCampaigns();}catch(e){}
+}
+
+function clearCampForm(){
+  $('campModalTitle').textContent='New Campaign';
+  $setVal('campEditId','');$setVal('campName','');$setVal('campDesc','');
+  $setVal('campBid','5.00');$setVal('campEnv','');$setVal('campBudgetDaily','100');
+  $setVal('campBudgetTotal','10000');$setVal('campFreqH','3');$setVal('campFreqD','10');
+  $setVal('campStart','');$setVal('campEnd','');
+  $setVal('campBidFloor','0');$setVal('campAdomain','');$setVal('campIabCats','');$setVal('campFloorConfig','');
+}
+
+async function populateAdvDropdown(selectId){
+  if(!advertisersCache.length){try{advertisersCache=await api('/api/v1/admin/advertisers')}catch(e){}}
+  const sel=$(selectId);
+  sel.innerHTML=advertisersCache.filter(a=>a.status===1).map(a=>`<option value="${a.id}">${a.name} (#${a.id})</option>`).join('');
+}
+
+// ═════════════════════════════════════════════════════════════
+// TARGETING
+// ═════════════════════════════════════════════════════════════
+async function loadCampaignDropdowns(){
+  if(!campaignsCache.length){try{campaignsCache=await api('/api/v1/admin/campaigns')}catch(e){}}
+  const tSel=$('targetCampSelect');
+  if(tSel){const cv=tSel.value;tSel.innerHTML='<option value="">— Choose campaign —</option>'+campaignsCache.filter(c=>c.status!==3).map(c=>`<option value="${c.id}">${c.name} (#${c.id})</option>`).join('');tSel.value=cv}
+  const aSel=$('analyticsCampSelect');
+  if(aSel){const cv=aSel.value;aSel.innerHTML='<option value="">— All Campaigns —</option>'+campaignsCache.map(c=>`<option value="${c.id}">${c.name} (#${c.id})</option>`).join('');aSel.value=cv}
+}
+
+async function loadTargetingRules(){
+  const campId=$val('targetCampSelect');
+  $('btnAddRule').disabled=!campId;
+  if(!campId){$('targetTableBody').innerHTML='<tr><td colspan="5" style="text-align:center;color:var(--fg3);padding:30px">Select a campaign above</td></tr>';return}
+  try{
+    const rules=await api(`/api/v1/admin/campaigns/${campId}/targeting`);
+    $('targetTableBody').innerHTML=rules.length?rules.map(r=>`<tr>
+      <td>${r.id}</td><td><strong>${esc(r.rule_type)}</strong></td>
+      <td><span class="badge ${r.is_include?'badge-active':'badge-inactive'}">${r.is_include?'Include':'Exclude'}</span></td>
+      <td><code style="font-size:11px;color:var(--fg2)">${esc(JSON.stringify(r.rule_value))}</code></td>
+      <td><button class="btn btn-danger btn-sm" onclick="deleteTargetingRule(${r.id})">Delete</button></td>
+    </tr>`).join(''):'<tr><td colspan="5" style="text-align:center;color:var(--fg3);padding:30px">No targeting rules</td></tr>';
+  }catch(e){}
+}
+
+function openTargetingModal(){$setVal('targetType','geo');$setVal('targetInclude','true');$setVal('targetValue','');updateRuleValueHint();openModal('targetModal')}
+function updateRuleValueHint(){$('targetHint').textContent=RULE_HINTS[$val('targetType')]||''}
+
+async function saveTargetingRule(){
+  const campId=$val('targetCampSelect');
+  let ruleValue;try{ruleValue=JSON.parse($val('targetValue'))}catch(e){return toast('Rule value must be valid JSON','error')}
+  const body={rule_type:$val('targetType'),rule_value:ruleValue,is_include:$val('targetInclude')==='true'};
+  try{await api(`/api/v1/admin/campaigns/${campId}/targeting`,{method:'POST',body});toast('Targeting rule added');closeModal('targetModal');loadTargetingRules();}catch(e){}
+}
+
+async function deleteTargetingRule(ruleId){
+  if(!confirm('Delete this targeting rule?')) return;
+  try{await api(`/api/v1/admin/targeting/${ruleId}`,{method:'DELETE'});toast('Rule deleted');loadTargetingRules();}catch(e){}
+}
+
+// ═════════════════════════════════════════════════════════════
+// ANALYTICS
+// ═════════════════════════════════════════════════════════════
+let currentAnalyticsTab='today';
+
+function switchAnalyticsTab(tab){
+  currentAnalyticsTab=tab;
+  document.querySelectorAll('#page-analytics .tab').forEach(t=>{t.classList.toggle('active',t.dataset.tab===tab)});
+  loadAnalytics();
+}
+
+async function loadAnalytics(){
+  const campId=$val('analyticsCampSelect');
+  if(currentAnalyticsTab==='demand'){try{const d=await api('/api/v1/analytics/reports/demand');renderDemandReport(d)}catch(e){}return}
+  if(currentAnalyticsTab==='supply'){try{const d=await api('/api/v1/analytics/reports/supply');renderSupplyReport(d)}catch(e){}return}
+  if(currentAnalyticsTab==='delivery'){try{const d=await api('/api/v1/analytics/reports/delivery-health');renderDeliveryHealthTab(d)}catch(e){$('analyticsTableWrap').innerHTML='<p style="color:var(--red);text-align:center;padding:20px">Failed to load</p>'}return}
+  if(currentAnalyticsTab==='vasterrors'){try{const d=await api('/api/v1/analytics/reports/vast-errors');renderVastErrorsTab(d)}catch(e){$('analyticsTableWrap').innerHTML='<p style="color:var(--red);text-align:center;padding:20px">Failed to load</p>'}return}
+
+  if(!campId){
+    try{
+      const resp=await api('/api/v1/analytics/campaigns');
+      const data=resp.campaigns||(Array.isArray(resp)?resp:[]);
+      let ti=0,tc=0,tk=0;data.forEach(c=>{ti+=c.impressions||0;tc+=c.completions||0;tk+=c.clicks||0});
+      $('anImps').textContent=fmtNum(ti);$('anCompl').textContent=fmtNum(tc);$('anClicks').textContent=fmtNum(tk);
+      $('anVtr').textContent=ti>0?((tc/ti)*100).toFixed(1)+'%':'—';
+      $('analyticsTableWrap').innerHTML=data.length?
+        `<table><thead><tr><th>Campaign</th><th>Imps</th><th>Completions</th><th>Clicks</th><th>CTR</th><th>VTR</th><th>Spend</th></tr></thead>
+        <tbody>${data.map(c=>`<tr><td><strong>${esc(c.name||'Campaign '+(c.campaign_id||c.id))}</strong></td>
+        <td>${fmtNum(c.impressions)}</td><td>${fmtNum(c.completions)}</td><td>${fmtNum(c.clicks)}</td>
+        <td>${c.impressions?((c.clicks/c.impressions)*100).toFixed(2)+'%':'—'}</td>
+        <td>${c.impressions?((c.completions/c.impressions)*100).toFixed(1)+'%':'—'}</td>
+        <td>${fmtMoney(c.spent_today||c.spend||0)}</td></tr>`).join('')}</tbody></table>`
+        :'<p style="color:var(--fg3);text-align:center;padding:20px">No analytics data</p>';
+    }catch(e){$('analyticsTableWrap').innerHTML='<p style="color:var(--fg3);text-align:center;padding:20px">Error loading analytics</p>'}
+    return;
+  }
+
+  if(currentAnalyticsTab==='today'){
+    try{
+      const d=await api(`/api/v1/analytics/campaign/${campId}/today`);
+      $('anImps').textContent=fmtNum(d.impressions||0);$('anCompl').textContent=fmtNum(d.completions||0);
+      $('anClicks').textContent=fmtNum(d.clicks||0);
+      $('anVtr').textContent=(d.impressions||0)>0?((d.completions||0)/d.impressions*100).toFixed(1)+'%':'—';
+      $('analyticsTableWrap').innerHTML=`<table><thead><tr><th>Metric</th><th>Value</th></tr></thead><tbody>`+
+        Object.entries(d).map(([k,v])=>`<tr><td>${esc(k)}</td><td>${typeof v==='number'?(k.includes('price')||k.includes('spend')||k.includes('revenue')?fmtMoney(v):fmtNum(v)):esc(String(v))}</td></tr>`).join('')+`</tbody></table>`;
+    }catch(e){}
+  }else if(currentAnalyticsTab==='budget'){
+    try{
+      const d=await api(`/api/v1/analytics/campaign/${campId}/budget`);
+      $('analyticsTableWrap').innerHTML=`<table><thead><tr><th>Metric</th><th>Value</th></tr></thead><tbody>`+
+        Object.entries(d).map(([k,v])=>`<tr><td>${esc(k)}</td><td>${typeof v==='number'?(k.includes('budget')||k.includes('spent')||k.includes('balance')?fmtMoney(v):fmtNum(v)):esc(String(v))}</td></tr>`).join('')+`</tbody></table>`;
+    }catch(e){}
+  }
+}
+
+function renderDemandReport(data){
+  const rows=Array.isArray(data)?data:(data.rows||[]);
+  $('analyticsTableWrap').innerHTML=rows.length?
+    `<table><thead><tr><th>ADomain</th><th>Demand ID</th><th>Creative ID</th><th>Imps</th><th>Revenue</th><th>eCPM</th><th>Avg Win Price</th><th>Fill Rate</th></tr></thead>
+    <tbody>${rows.map(r=>`<tr><td><strong>${esc(r.adomain||'—')}</strong></td><td>${r.demand_id||'—'}</td><td>${r.demand_creative_id||'—'}</td>
+    <td>${fmtNum(r.impressions||0)}</td><td>${fmtMoney(r.gross_revenue||0)}</td><td>${fmtMoney(r.gross_ecpm||0)}</td>
+    <td>${fmtMoney(r.avg_win_price||0)}</td><td>${r.bid_request_fill_rate?r.bid_request_fill_rate.toFixed(1)+'%':'—'}</td></tr>`).join('')}</tbody></table>`
+    :'<p style="color:var(--fg3);text-align:center;padding:20px">No demand report data</p>';
+}
+
+function renderSupplyReport(data){
+  const rows=Array.isArray(data)?data:(data.rows||[]);
+  $('analyticsTableWrap').innerHTML=rows.length?
+    `<table><thead><tr><th>Source</th><th>Campaign</th><th>Country</th><th>Bundle</th><th>Requests</th><th>Opps</th><th>Imps</th><th>Fill Rate</th><th>Revenue</th><th>eCPM</th></tr></thead>
+    <tbody>${rows.map(r=>`<tr><td><strong>${esc(r.source_name||'—')}</strong></td><td>${esc(r.campaign_name||String(r.campaign_id||'—'))}</td>
+    <td>${esc(r.country_code||'—')}</td><td>${esc(r.bundle_id||'—')}</td>
+    <td>${fmtNum(r.ad_requests||0)}</td><td>${fmtNum(r.ad_opportunities||0)}</td><td>${fmtNum(r.impressions||0)}</td>
+    <td>${r.fill_rate_ad_req!=null?r.fill_rate_ad_req.toFixed(1)+'%':'—'}</td>
+    <td>${fmtMoney(r.total_revenue||0)}</td><td>${fmtMoney(r.ecpm||0)}</td></tr>`).join('')}</tbody></table>`
+    :'<p style="color:var(--fg3);text-align:center;padding:20px">No supply report data</p>';
+}
+
+async function flushStats(){try{await api('/api/v1/analytics/flush',{method:'POST'});toast('Stats flushed');loadAnalytics()}catch(e){}}
+
+// ═════════════════════════════════════════════════════════════
+// DELIVERY HEALTH
+// ═════════════════════════════════════════════════════════════
+async function loadDeliveryHealth(){
+  try{
+    const [health,errors]=await Promise.all([api('/api/v1/analytics/reports/delivery-health'),api('/api/v1/analytics/reports/vast-errors')]);
+    const agg=health.aggregate||{};
+    $('hStartRate').textContent=(agg.ad_start_rate||0)+'%';
+    $('hVtr').textContent=(agg.vtr||0)+'%';
+    $('hSkipRate').textContent=(agg.skip_rate||0)+'%';
+    $('hErrorRate').textContent=(agg.error_rate||0)+'%';
+    $('hFillRate').textContent=(agg.fill_rate||0)+'%';
+    $('hNoBidRate').textContent=(agg.no_bid_rate||0)+'%';
+
+    const funnel=health.funnel||{};
+    const steps=[{label:'Impressions',value:funnel.impressions||0,color:'var(--accent2)'},{label:'Starts',value:funnel.starts||0,color:'var(--blue)'},{label:'Q1 (25%)',value:funnel.first_quartiles||0,color:'var(--green)'},{label:'Midpoint',value:funnel.midpoints||0,color:'var(--yellow)'},{label:'Q3 (75%)',value:funnel.third_quartiles||0,color:'#f97316'},{label:'Completions',value:funnel.completions||0,color:'var(--green)'}];
+    const mx=Math.max(...steps.map(s=>s.value),1);
+    $('funnelChart').innerHTML=steps.map(s=>{const p=(s.value/mx*100).toFixed(0);return `<div style="display:flex;align-items:center;gap:12px"><span style="width:100px;font-size:13px;color:var(--fg2);text-align:right">${s.label}</span><div style="flex:1;background:var(--bg3);border-radius:4px;height:28px;overflow:hidden;position:relative"><div style="width:${p}%;background:${s.color};height:100%;border-radius:4px;transition:width .5s;min-width:2px"></div><span style="position:absolute;right:8px;top:50%;transform:translateY(-50%);font-size:12px;font-weight:600;color:var(--fg)">${fmtNum(s.value)}</span></div></div>`}).join('');
+
+    const cdata=health.by_campaign||[];
+    $('healthTableBody').innerHTML=cdata.length?cdata.map(c=>`<tr><td>${c.campaign_id}</td><td>${fmtNum(c.impressions)}</td><td>${fmtNum(c.starts)}</td><td>${c.ad_start_rate}%</td><td>${fmtNum(c.first_quartiles)}</td><td>${fmtNum(c.midpoints)}</td><td>${fmtNum(c.third_quartiles)}</td><td>${fmtNum(c.completions)}</td><td style="color:var(--green);font-weight:600">${c.vtr}%</td><td>${c.skip_rate}%</td><td style="color:${c.error_rate>5?'var(--red)':'var(--fg2)'}">${c.error_rate}%</td></tr>`).join(''):'<tr><td colspan="11" style="text-align:center;color:var(--fg3);padding:30px">No delivery health data</td></tr>';
+
+    $('hTotalErrors').textContent=fmtNum(errors.total_errors||0);
+    $('hTotalEvents').textContent=fmtNum(errors.total_events||0);
+    $('hOverallErrorRate').textContent=(errors.error_rate_pct||0)+'%';
+    const errRows=errors.by_campaign||[];
+    $('vastErrorsTableBody').innerHTML=errRows.length?errRows.map(r=>`<tr><td>${r.campaign_id||'—'}</td><td style="color:var(--red);font-weight:600">${fmtNum(r.error_count)}</td></tr>`).join(''):'<tr><td colspan="2" style="text-align:center;color:var(--fg3);padding:20px">No VAST errors</td></tr>';
+  }catch(e){}
+}
+
+function renderDeliveryHealthTab(data){
+  const agg=data.aggregate||{};const cdata=data.by_campaign||[];
+  let h='<div class="stats-grid" style="margin-bottom:16px">';
+  h+=`<div class="stat-card green"><div class="label">Start Rate</div><div class="value">${agg.ad_start_rate||0}%</div></div>`;
+  h+=`<div class="stat-card blue"><div class="label">VTR</div><div class="value">${agg.vtr||0}%</div></div>`;
+  h+=`<div class="stat-card yellow"><div class="label">Skip Rate</div><div class="value">${agg.skip_rate||0}%</div></div>`;
+  h+=`<div class="stat-card"><div class="label">Error Rate</div><div class="value" style="color:var(--red)">${agg.error_rate||0}%</div></div>`;
+  h+=`<div class="stat-card accent"><div class="label">Fill Rate</div><div class="value">${agg.fill_rate||0}%</div></div>`;
+  h+=`<div class="stat-card"><div class="label">No-Bid Rate</div><div class="value" style="color:var(--fg2)">${agg.no_bid_rate||0}%</div></div></div>`;
+  h+=cdata.length?`<table><thead><tr><th>Campaign</th><th>Imps</th><th>Starts</th><th>Start %</th><th>VTR</th><th>Skip %</th><th>Error %</th></tr></thead><tbody>${cdata.map(c=>`<tr><td>${c.campaign_id}</td><td>${fmtNum(c.impressions)}</td><td>${fmtNum(c.starts)}</td><td>${c.ad_start_rate}%</td><td style="color:var(--green)">${c.vtr}%</td><td>${c.skip_rate}%</td><td style="color:${c.error_rate>5?'var(--red)':'var(--fg2)'}">${c.error_rate}%</td></tr>`).join('')}</tbody></table>`:'<p style="color:var(--fg3);text-align:center;padding:20px">No data</p>';
+  $('analyticsTableWrap').innerHTML=h;
+}
+
+function renderVastErrorsTab(data){
+  const rows=data.by_campaign||[];
+  let h='<div class="stats-grid" style="margin-bottom:16px">';
+  h+=`<div class="stat-card"><div class="label">Total Errors</div><div class="value" style="color:var(--red)">${fmtNum(data.total_errors||0)}</div></div>`;
+  h+=`<div class="stat-card"><div class="label">Total Events</div><div class="value">${fmtNum(data.total_events||0)}</div></div>`;
+  h+=`<div class="stat-card"><div class="label">Error Rate</div><div class="value" style="color:var(--red)">${data.error_rate_pct||0}%</div></div></div>`;
+  h+=rows.length?`<table><thead><tr><th>Campaign ID</th><th>Error Count</th></tr></thead><tbody>${rows.map(r=>`<tr><td>${r.campaign_id||'—'}</td><td style="color:var(--red);font-weight:600">${fmtNum(r.error_count)}</td></tr>`).join('')}</tbody></table>`:'<p style="color:var(--fg3);text-align:center;padding:20px">No VAST errors</p>';
+  $('analyticsTableWrap').innerHTML=h;
+}
+
+// ═════════════════════════════════════════════════════════════
+// SETTINGS
+// ═════════════════════════════════════════════════════════════
+function saveSettings(){
+  const base=$val('apiBaseUrl').replace(/\/+$/,'');
+  API_BASE=base||window.location.origin;
+  localStorage.setItem('liteads_api_base',API_BASE);
+  toast('Settings saved');
+  try{const u=new URL(API_BASE);$('grafanaLink').href=`${u.protocol}//${u.hostname}:3000`}catch(e){}
+}
+
+// ═════════════════════════════════════════════════════════════
+// INIT
+// ═════════════════════════════════════════════════════════════
+document.addEventListener('DOMContentLoaded',()=>{
+  $setVal('apiBaseUrl',API_BASE);
+  try{const u=new URL(API_BASE);$('grafanaLink').href=`${u.protocol}//${u.hostname}:3000`}catch(e){}
+  loadDashboard();
+});
+
+document.querySelectorAll('.modal-overlay').forEach(o=>{o.addEventListener('click',e=>{if(e.target===o)o.classList.remove('active')})});
+document.addEventListener('keydown',e=>{if(e.key==='Escape')document.querySelectorAll('.modal-overlay.active').forEach(m=>m.classList.remove('active'))});
+</script>
+</body>
+</html>
