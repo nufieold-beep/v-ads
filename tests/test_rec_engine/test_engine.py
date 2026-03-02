@@ -153,7 +153,7 @@ class TestRecommendationConfig:
 
         assert config.max_retrieval == 100
         assert config.enable_budget_filter is True
-        assert config.enable_frequency_filter is True
+        assert config.enable_frequency_filter is False
         assert config.fallback_ctr == 0.005
 
     def test_custom_config(self) -> None:

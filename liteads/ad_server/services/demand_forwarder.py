@@ -97,6 +97,13 @@ _mapping_cache: dict[int, Tuple[float, list]] = {}
 # and MUST be preserved in the ORTB payload.
 _KEEP_EMPTY = {"api", "ext", "bcat", "badv"}
 
+# ── Pre-compiled regex patterns ───────────────────────────────────────────
+# OS version extraction patterns (used in _build_bid_request per request).
+_RE_ANDROID_VER = re.compile(r'Android\s+(\d+[\.\d]*)')
+_RE_ROKU_VER = re.compile(r'DVP-(\d+[\.\d]*)')
+# Single-pass macro substitution pattern: matches {MACRO} and ${MACRO}.
+_RE_MACRO_TOKEN = re.compile(r'\$?\{([^}]+)\}')
+
 
 def _strip_empty(obj: object, _key: str = "") -> object:
     """Recursively strip empty lists/dicts from a JSON-serialisable object.
@@ -305,7 +312,7 @@ class DemandForwarder:
                 and mapping.demand_endpoint.status == Status.ACTIVE
             ):
                 tasks.append(
-                    asyncio.ensure_future(
+                    asyncio.create_task(
                         self._request_ortb_endpoint(
                             endpoint=mapping.demand_endpoint,
                             ad_request=ad_request,
@@ -320,7 +327,7 @@ class DemandForwarder:
                 and mapping.demand_vast_tag.status == Status.ACTIVE
             ):
                 tasks.append(
-                    asyncio.ensure_future(
+                    asyncio.create_task(
                         self._resolve_vast_tag(
                             vast_tag=mapping.demand_vast_tag,
                             ad_request=ad_request,
@@ -1046,11 +1053,10 @@ class DemandForwarder:
             # ── OS version: try to parse from UA if not provided ──
             osv = d.os_version
             if not osv and d.ua:
-                import re as _re
                 # Try patterns like "Android 9", "Roku/DVP-14.0"
-                _m = _re.search(r'Android\s+(\d+[\.\d]*)', d.ua)
+                _m = _RE_ANDROID_VER.search(d.ua)
                 if not _m:
-                    _m = _re.search(r'DVP-(\d+[\.\d]*)', d.ua)
+                    _m = _RE_ROKU_VER.search(d.ua)
                 if _m:
                     osv = _m.group(1)
 
@@ -1633,13 +1639,14 @@ class DemandForwarder:
             "vast_version": "2",
         }
 
-        # 1. Replace curly-brace macros globally: {uip} → actual IP, etc.
-        for macro_key, macro_val in macro_map.items():
-            url = url.replace("{" + macro_key + "}", macro_val)
-            url = url.replace("{" + macro_key.upper() + "}", macro_val)
+        # 1. Replace curly-brace macros globally in a single pass.
+        # Handles both {macro} and ${MACRO} tokens (case-insensitive key lookup).
+        # All keys in macro_map are lowercase; .lower() normalises the token.
+        def _replace_macro_token(m: re.Match) -> str:  # type: ignore[type-arg]
+            key = m.group(1).lower()  # macro_map keys are all lowercase
+            return macro_map.get(key, "")
 
-        # Also handle ${MACRO} style
-        url = url.replace("${AUCTION_PRICE}", "")
+        url = _RE_MACRO_TOKEN.sub(_replace_macro_token, url)
 
         # 2. Replace [replace_me] macros keyed by query-param name
         parsed = urlparse(url)
