@@ -7,11 +7,8 @@ ssh = paramiko.SSHClient()
 ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
 ssh.connect("173.208.137.202", username="root", password="Dewa@123")
 
-# Wait for some traffic
-time.sleep(5)
-
-# Get recent logs
-_, stdout, _ = ssh.exec_command("docker logs --tail=200 liteads-ad-server-1 2>&1")
+# Get recent logs (limit to last 100 lines to avoid timeout)
+_, stdout, _ = ssh.exec_command("docker logs --tail=100 liteads-ad-server-1 2>&1", timeout=10)
 all_lines = stdout.read().decode().strip().split("\n")
 
 nobid = len([l for l in all_lines if "dsp_204" in l])

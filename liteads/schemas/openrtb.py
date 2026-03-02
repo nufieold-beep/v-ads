@@ -12,7 +12,7 @@ from __future__ import annotations
 
 from typing import Any, Optional
 
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 
 # ============================================================================
@@ -473,6 +473,37 @@ class Bid(BaseModel):
     apis: list[int] = Field(default_factory=list)  # Supported API frameworks (OpenRTB 2.6)
     cattax: Optional[int] = None        # Category taxonomy version
     ext: Optional[dict[str, Any]] = None
+
+    # DSPs sometimes send mtype as a string (e.g. "CREATIVE_MARKUP_VIDEO")
+    # instead of the spec integer.  Coerce gracefully.
+    _MTYPE_STR_MAP: dict[str, int] = {
+        "CREATIVE_MARKUP_VIDEO": 2,
+        "CREATIVE_MARKUP_BANNER": 1,
+        "CREATIVE_MARKUP_AUDIO": 4,
+        "CREATIVE_MARKUP_NATIVE": 3,
+        "VIDEO": 2,
+        "BANNER": 1,
+        "AUDIO": 4,
+        "NATIVE": 3,
+    }
+
+    @field_validator("mtype", mode="before")
+    @classmethod
+    def _coerce_mtype(cls, v: Any) -> int | None:
+        if v is None:
+            return None
+        if isinstance(v, int):
+            return v
+        if isinstance(v, str):
+            # Try name lookup first, then numeric string
+            upper = v.strip().upper()
+            if upper in cls._MTYPE_STR_MAP:
+                return cls._MTYPE_STR_MAP[upper]
+            try:
+                return int(v)
+            except ValueError:
+                return 2  # Default to video for unknown strings
+        return v
 
 
 class SeatBid(BaseModel):
