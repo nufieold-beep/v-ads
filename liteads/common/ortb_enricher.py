@@ -2,8 +2,12 @@
 OpenRTB 2.6 Bid-Request Auto-Enrichment.
 
 When a publisher sends an incomplete ORTB bid request, this module fills
-every missing field with IAB-compliant defaults so that downstream DSPs
-always receive a fully-formed request.
+essential missing fields with IAB-compliant defaults so that downstream DSPs
+always receive a well-formed request.
+
+Keeps the payload clean and slim — only fills truly missing essential fields.
+Does NOT add verbose optional fields (schain, user.ext, regs.ext, etc.)
+that bloat the payload and reduce DSP response rates.
 
 Usage:
     from liteads.common.ortb_enricher import enrich_bid_request
@@ -26,7 +30,7 @@ logger = get_logger(__name__)
 
 _DEFAULTS_VIDEO = {
     "mimes": ["video/mp4"],
-    "protocols": [2, 3, 5, 6, 7, 8],
+    "protocols": [2, 3, 4, 5, 6, 7, 8],
     "w": 1920,
     "h": 1080,
     "plcmt": 1,
@@ -35,9 +39,8 @@ _DEFAULTS_VIDEO = {
     "startdelay": 0,
     "minduration": 3,
     "maxduration": 30,
-    "playbackmethod": [1, 3, 4, 5],
+    "playbackmethod": [1],
     "delivery": [2],
-    "skip": 0,
 }
 
 _DEFAULTS_DEVICE = {
@@ -45,33 +48,6 @@ _DEFAULTS_DEVICE = {
     "lmt": 0,
     "dnt": 0,
     "language": "en",
-}
-
-_DEFAULTS_CONTENT = {
-    "len": 1800,
-    "livestream": 0,
-    "language": "en",
-    "cat": ["IAB1-6"],
-}
-
-_DEFAULTS_PUBLISHER = {
-    "id": "PUB_ID",
-    "name": "PUBLISHER",
-}
-
-_DEFAULTS_REGS = {
-    "coppa": 0,
-}
-
-_DEFAULTS_REGS_EXT = {
-    "gdpr": 0,
-    "us_privacy": "1---",
-}
-
-_DEFAULTS_SCHAIN_NODE = {
-    "asi": "viadsmedia.com",
-    "sid": "778008",
-    "hp": 1,
 }
 
 
@@ -91,18 +67,6 @@ def _set_default(obj: Any, attr: str, default: Any) -> bool:
     return False
 
 
-def _ensure_dict_defaults(obj: Any, attr: str, defaults: dict) -> None:
-    """For an ``ext`` dict attribute, merge missing keys from *defaults*."""
-    ext = getattr(obj, attr, None)
-    if ext is None:
-        setattr(obj, attr, dict(defaults))
-        return
-    if isinstance(ext, dict):
-        for k, v in defaults.items():
-            if k not in ext:
-                ext[k] = v
-
-
 # ─────────────────────────────────────────────────────────────────────────────
 # Public API
 # ─────────────────────────────────────────────────────────────────────────────
@@ -116,17 +80,15 @@ def enrich_bid_request(
 ) -> Any:
     """Enrich an OpenRTB ``BidRequest`` in-place and return it.
 
-    Parameters
-    ----------
-    br:
-        A ``liteads.schemas.openrtb.BidRequest`` instance (Pydantic model).
-    client_ip:
-        Real client IP from ``X-Forwarded-For`` header – used when ``device.ip``
-        is missing.
-    user_agent:
-        ``User-Agent`` header value – used when ``device.ua`` is missing.
-    slot_id:
-        Supply-tag slot ID – used as fallback for ``imp.tagid`` and ``app.id``.
+    Only fills truly essential missing fields:
+    - Request ID, at, tmax
+    - Imp basics (id, tagid, bidfloor)
+    - Video defaults (mimes, protocols, dimensions)
+    - Device IP/UA from headers
+    - Geo from MaxMind
+    - Basic app/publisher fallbacks
+
+    Does NOT add: schain, user.ext, regs.ext, content defaults, etc.
     """
     enriched_fields: list[str] = []
 
@@ -140,10 +102,6 @@ def enrich_bid_request(
 
     if _set_default(br, "tmax", 500):
         enriched_fields.append("tmax")
-
-    if not br.cur or br.cur == []:
-        br.cur = ["USD"]
-        enriched_fields.append("cur")
 
     # ── 2. Impression + Video ─────────────────────────────────────────
     for imp in br.imp:
@@ -159,12 +117,8 @@ def enrich_bid_request(
             imp.bidfloor = 5.0
             enriched_fields.append("imp.bidfloor")
 
-        if _set_default(imp, "bidfloorcur", "USD"):
-            enriched_fields.append("imp.bidfloorcur")
-
         # -- Video --
         if imp.video is None:
-            # Create a minimal Video object from defaults
             from liteads.schemas.openrtb import Video as OrtbVideo
             imp.video = OrtbVideo(**_DEFAULTS_VIDEO)
             enriched_fields.append("imp.video (created)")
@@ -204,14 +158,14 @@ def enrich_bid_request(
     # ── 4. Geo auto-enrichment from MaxMind ───────────────────────────
     _enrich_geo(br, enriched_fields)
 
-    # ── 5. App / Publisher / Content ──────────────────────────────────
+    # ── 5. App / Publisher ────────────────────────────────────────────
     if br.app is None:
         from liteads.schemas.openrtb import App as OrtbApp, Publisher as OrtbPublisher
         br.app = OrtbApp(
             id=slot_id or "APP_ID",
             name="APP_NAME",
             bundle="com.example.ctv",
-            publisher=OrtbPublisher(**_DEFAULTS_PUBLISHER),
+            publisher=OrtbPublisher(id=slot_id or "PUB_ID"),
         )
         enriched_fields.append("app (created)")
     else:
@@ -223,56 +177,23 @@ def enrich_bid_request(
         # Publisher
         if app.publisher is None:
             from liteads.schemas.openrtb import Publisher as OrtbPublisher
-            app.publisher = OrtbPublisher(**_DEFAULTS_PUBLISHER)
+            app.publisher = OrtbPublisher(id=slot_id or "PUB_ID")
             enriched_fields.append("app.publisher (created)")
-        else:
-            for key, default in _DEFAULTS_PUBLISHER.items():
-                _set_default(app.publisher, key, default)
 
-        # Content – only fill lightweight defaults when completely absent
-        if app.content is None:
-            from liteads.schemas.openrtb import Content as OrtbContent
-            app.content = OrtbContent(**_DEFAULTS_CONTENT)
-            enriched_fields.append("app.content (created)")
-        else:
-            for key, default in _DEFAULTS_CONTENT.items():
-                if _set_default(app.content, key, default):
-                    enriched_fields.append(f"app.content.{key}")
-
-    # ── 6. User ───────────────────────────────────────────────────────
-    if br.user is None:
-        from liteads.schemas.openrtb import User as OrtbUser
-        ifa = br.device.ifa if br.device else None
-        br.user = OrtbUser(
-            id=ifa or "",
-            ext={"consent": "", "eids": []},
+    # ── 6. Source — only fill fd/tid if completely missing ─────────────
+    if br.source is None:
+        from liteads.schemas.openrtb import Source as OrtbSource
+        br.source = OrtbSource(
+            fd=1,
+            tid=br.id,
         )
-        enriched_fields.append("user (created)")
-    else:
-        if br.user.ext is None:
-            br.user.ext = {"consent": "", "eids": []}
-            enriched_fields.append("user.ext")
-        else:
-            if "consent" not in br.user.ext:
-                br.user.ext["consent"] = ""
-            if "eids" not in br.user.ext:
-                br.user.ext["eids"] = []
+        enriched_fields.append("source (created)")
 
-    # ── 7. Regs ───────────────────────────────────────────────────────
+    # ── 7. Regs — only fill coppa if completely missing ───────────────
     if br.regs is None:
         from liteads.schemas.openrtb import Regs as OrtbRegs
-        br.regs = OrtbRegs(
-            coppa=0,
-            ext=dict(_DEFAULTS_REGS_EXT),
-        )
+        br.regs = OrtbRegs(coppa=0)
         enriched_fields.append("regs (created)")
-    else:
-        if _set_default(br.regs, "coppa", 0):
-            enriched_fields.append("regs.coppa")
-        _ensure_dict_defaults(br.regs, "ext", _DEFAULTS_REGS_EXT)
-
-    # ── 8. Source / SChain ────────────────────────────────────────────
-    _enrich_source(br, slot_id, enriched_fields)
 
     # Log summary
     if enriched_fields:
@@ -320,48 +241,3 @@ def _enrich_geo(br: Any, enriched_fields: list[str]) -> None:
             enriched_fields.append("device.geo (MaxMind)")
     except Exception as exc:
         logger.debug("GeoIP enrichment skipped", error=str(exc))
-
-
-def _enrich_source(br: Any, slot_id: Optional[str], enriched_fields: list[str]) -> None:
-    """Ensure ``source.ext.schain`` is present with our node."""
-    if br.source is None:
-        from liteads.schemas.openrtb import Source as OrtbSource, SupplyChain, SupplyChainNode
-
-        br.source = OrtbSource(
-            ext={
-                "schain": {
-                    "ver": "1.0",
-                    "complete": 1,
-                    "nodes": [
-                        {
-                            "asi": "viadsmedia.com",
-                            "sid": slot_id or "778008",
-                            "hp": 1,
-                        }
-                    ],
-                }
-            },
-        )
-        enriched_fields.append("source (created)")
-        return
-
-    # Source exists but schain may be missing
-    src = br.source
-    if src.schain is None:
-        # Check ext.schain too (some SSPs put it there)
-        if src.ext and "schain" in src.ext:
-            return  # already has schain in ext
-
-        from liteads.schemas.openrtb import SupplyChain, SupplyChainNode
-        src.schain = SupplyChain(
-            ver="1.0",
-            complete=1,
-            nodes=[
-                SupplyChainNode(
-                    asi="viadsmedia.com",
-                    sid=slot_id or "778008",
-                    hp=1,
-                )
-            ],
-        )
-        enriched_fields.append("source.schain (created)")

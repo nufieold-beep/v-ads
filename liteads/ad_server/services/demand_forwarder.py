@@ -56,8 +56,6 @@ from liteads.schemas.openrtb import (
     Publisher as OrtbPublisher,
     Regs as OrtbRegs,
     Source as OrtbSource,
-    SupplyChain,
-    SupplyChainNode,
     User as OrtbUser,
     Video as OrtbVideo,
 )
@@ -109,28 +107,33 @@ def _strip_empty(obj: object) -> object:
 
 # Fields to strip from the ORTB payload to reduce size / DSP parse time.
 # Keeps all targeting-critical fields (device.ifa, device.geo, device.ua,
-# device.devicetype, app.bundle, video core fields).
+# device.devicetype, app.bundle, video core fields, pod fields).
 _SLIM_VIDEO_KEYS = {
-    "companiontype", "maxextended", "boxingallowed", "playbackend",
-    "poddedupe", "podid", "podseq", "poddur", "maxseq", "ext",
+    "skip", "skipmin", "skipafter", "boxingallowed", "maxextended",
+    "pos", "api", "companiontype", "playbackend", "minbitrate", "maxbitrate",
+    "sequence", "battr", "companionad", "ext",
 }
-_SLIM_IMP_KEYS = {"metric", "exp", "rwdd", "displaymanager", "displaymanagerver"}
-_SLIM_DEVICE_KEYS = {"hwv", "didsha1", "didmd5", "pxratio", "language"}
+_SLIM_IMP_KEYS = {
+    "metric", "rwdd", "displaymanager", "displaymanagerver",
+    "instl", "bidfloorcur",
+}
+_SLIM_DEVICE_KEYS = {"hwv", "pxratio", "js", "connectiontype", "w", "h"}
 _SLIM_APP_KEYS = {
-    "privacypolicy", "paid", "sectioncat", "pagecat",
-    "inventorypartnerdomain", "ext", "ver",
+    "privacypolicy", "paid", "sectioncat", "ver",
 }
-_SLIM_TOP_KEYS = {"wlang", "cattax", "allimps"}
+_SLIM_TOP_KEYS = {"cur", "wlang", "cattax", "allimps"}
 
 
 def _slim_payload(payload: dict) -> dict:
     """Remove heavy optional fields to shrink payload for faster DSP response.
 
     Keeps ALL targeting-critical and compliance-critical fields:
-    - source/schain (required for ads.txt / supply chain transparency)
-    - user.eids (required for cross-platform identity resolution)
-    - user.ext (consent strings for GDPR/TCF 2.0)
-    - regs.ext (gdpr, us_privacy — many DSPs only read from ext)
+    - source.fd, source.tid (required for transaction tracking)
+    - user.customdata, user.eids (required for identity resolution)
+    - device.didsha1, device.didmd5, device.language (DSPs need these)
+    - app.pagecat, app.inventorypartnerdomain, app.ext (contextual targeting)
+    - imp.exp (impression expiry)
+    - video pod fields: poddur, maxseq, podid, podseq, poddedupe
     """
     # Top-level
     for k in _SLIM_TOP_KEYS:
@@ -145,27 +148,43 @@ def _slim_payload(payload: dict) -> dict:
             for k in _SLIM_VIDEO_KEYS:
                 video.pop(k, None)
 
-    # Device — only strip truly non-essential
+    # Device — strip non-essential screen/JS fields
     dev = payload.get("device")
     if dev:
-        for k in ("hwv", "didsha1", "didmd5", "pxratio"):
+        for k in _SLIM_DEVICE_KEYS:
             dev.pop(k, None)
 
-    # App — strip only non-essential
+    # App — strip non-essential policy fields
     app = payload.get("app")
     if app:
-        for k in ("privacypolicy", "paid", "sectioncat", "pagecat", "ver"):
+        for k in _SLIM_APP_KEYS:
             app.pop(k, None)
 
-    # KEEP source/schain — DSPs need this for ads.txt verification
-    # KEEP user.eids — DSPs need this for identity resolution
-    # KEEP user.ext — consent string for GDPR compliance
-    # KEEP regs.ext — gdpr/us_privacy (many DSPs only read from ext)
+    # Content — strip verbose fields DSPs don't use
+    content = app.get("content") if app else None
+    if content:
+        for k in ("sourcerelationship", "embeddable", "cattax", "producer"):
+            content.pop(k, None)
 
-    # User: only strip customdata (heavy, non-essential)
+    # Source — strip schain (target schema uses fd+tid only)
+    source = payload.get("source")
+    if source:
+        source.pop("schain", None)
+        source.pop("pchain", None)
+        source.pop("ext", None)
+
+    # Regs — strip ext, gpp, gpp_sid (target schema uses top-level only)
+    regs = payload.get("regs")
+    if regs:
+        regs.pop("ext", None)
+        regs.pop("gpp", None)
+        regs.pop("gpp_sid", None)
+
+    # User — strip id and ext (target schema uses customdata+eids only)
     user = payload.get("user")
     if user:
-        user.pop("customdata", None)
+        user.pop("id", None)
+        user.pop("ext", None)
 
     return payload
 
@@ -718,15 +737,6 @@ class DemandForwarder:
     # ------------------------------------------------------------------
 
     # ── CTV / In-App platform constants ───────────────────────────
-    # IAB OpenRTB 2.6 §5.21 – Connection Type enum
-    _CONN_TYPE_MAP: dict[str, int] = {
-        "ethernet": 1, "wifi": 2, "cellular_unknown": 3,
-        "cellular_2g": 4, "cellular_3g": 5, "cellular_4g": 6,
-        "cellular_5g": 7,
-    }
-
-    # IAB OpenRTB 2.6 §5.17 – Device Type enum
-    _CTV_DEVICE_TYPES: set[int] = {3, 7}  # 3=Connected TV, 7=Set-Top Box
 
     # Mapping from OS string → canonical OS name for the ORTB payload
     _OS_CANONICAL: dict[str, str] = {
@@ -743,7 +753,7 @@ class DemandForwarder:
         request_id: str,
         supply_tag: SupplyTag,
         bid_floor: float = 0.0,
-        tmax: int = 1500,
+        tmax: int = 500,
     ) -> BidRequest:
         """Construct a fully IAB OpenRTB 2.6 / IAV-compliant BidRequest.
 
@@ -809,9 +819,9 @@ class DemandForwarder:
         # CTV players universally accept VAST 2/3/4.x; in-app may also support VPAID
         vid_protocols = _csv_ints(v.video_protocols if v else None)
         if not vid_protocols:
-            # 2=VAST2.0, 3=VAST3.0, 5=VAST2.0-Wrapper, 6=VAST4.0,
-            # 7=VAST4.1, 8=VAST4.2
-            vid_protocols = [2, 3, 5, 6, 7, 8]
+            # 2=VAST2.0, 3=VAST3.0, 4=VAST2.0-Wrapper, 5=VAST3.0-Wrapper,
+            # 6=VAST4.0, 7=VAST4.1, 8=VAST4.2
+            vid_protocols = [2, 3, 4, 5, 6, 7, 8]
             if not is_ctv:
                 # In-app may support VPAID 2.0 JS (§5.8 value 3 is taken;
                 # VPAID is signalled via api[] instead).
@@ -846,49 +856,16 @@ class DemandForwarder:
         if not playback:
             playback = [1] if is_ctv else [1, 5]
 
-        # ── playbackend (§5.11): How the video playback concludes
-        #    1=On video completion (standard for both CTV & in-app linear)
-        playbackend = 1
-
         # ── delivery (§5.15): 1=Streaming, 2=Progressive, 3=Download
         delivery = _csv_ints(v.delivery if v else None) or [2, 1]
 
-        # ── api (§5.6): Supported API frameworks
-        #    CTV typically has NO VPAID/MRAID
-        #    7=OMID-1 (Open Measurement, universal for viewability)
-        #    3=MRAID-1, 5=MRAID-2, 6=MRAID-3 (mobile only)
-        api_frameworks: list[int] = [7]  # OMID is baseline for both
-        if not is_ctv:
-            # In-app supports MRAID for interstitials
-            api_frameworks = [3, 5, 6, 7]
-
-        # ── skip/skipmin/skipafter
-        skip_enabled = v.skip_enabled if v else False
-        skip_val = 1 if skip_enabled else 0
-        skipmin = 0 if skip_enabled else None
-        skipafter = 5 if skip_enabled else None  # 5s per IAB best practice
-
-        # ── pos (ad position on screen, §5.4): 7=Full-screen for CTV
-        pos = 7 if is_ctv else 1  # 1=Above-the-fold (mobile)
-
-        # ── companiontype: 1=Static, 2=HTML, 3=IFrame
-        companiontype = [1, 2] if is_ctv else [1, 2, 3]
-
-        # ── Video dimensions / bitrate / durations
+        # ── Video dimensions / durations
         width = v.width if v and v.width else supply_tag.width or 1920
         height = v.height if v and v.height else supply_tag.height or 1080
         minduration = (v.min_duration if v and v.min_duration
                        else supply_tag.min_duration or 1)
         maxduration = (v.max_duration if v and v.max_duration
                        else supply_tag.max_duration or 120)
-        minbitrate = v.minbitrate if v and v.minbitrate else (500 if is_ctv else 240)
-        maxbitrate = v.maxbitrate if v and v.maxbitrate else 30000
-
-        # ── Build Video ext for SSAI and CTV-specific signals
-        video_ext: dict | None = None
-        if is_ctv:
-            # Signal server-side ad insertion (SSAI) which is standard for CTV
-            video_ext = {"is_rewarded_inventory": 0}
 
         video = OrtbVideo(
             mimes=mimes,
@@ -901,27 +878,14 @@ class DemandForwarder:
             placement=placement,
             plcmt=plcmt,
             linearity=linearity,
-            skip=skip_val,
-            skipmin=skipmin,
-            skipafter=skipafter,
-            sequence=v.sequence if v and v.sequence else 1,
-            minbitrate=minbitrate,
-            maxbitrate=maxbitrate,
-            boxingallowed=1,
             playbackmethod=playback,
-            playbackend=playbackend,
             delivery=delivery,
-            pos=pos,
-            api=api_frameworks,
-            companiontype=companiontype,
-            maxextended=-1 if is_ctv else 0,  # -1=allow any extension for CTV
-            # Ad Pod fields (OpenRTB 2.6 §3.2.7)
+            # Ad Pod fields (OpenRTB 2.6 §3.2.7) – DSPs need these
             poddur=v.pod_duration if v and v.pod_duration else None,
             maxseq=v.max_ads_in_pod if v and v.max_ads_in_pod else None,
             podid=v.podid if v and v.podid else None,
             podseq=v.podseq if v else None,
             poddedupe=_csv_ints(v.poddedupe if v else None) or [],
-            ext=video_ext,
         )
 
         # ══════════════════════════════════════════════════════════════
@@ -935,41 +899,13 @@ class DemandForwarder:
             float(supply_tag.bid_floor or Decimal("0")),
         )
 
-        # displaymanager / displaymanagerver – per IAB, SSPs should declare
-        # the rendering SDK or SSAI engine managing the impression
-        if is_ctv:
-            display_mgr = "LiteAds-SSAI"
-            display_mgr_ver = "1.0"
-        else:
-            display_mgr = "LiteAds-SDK"
-            display_mgr_ver = "1.0"
-
-        # instl: 1=full-screen / interstitial – CTV is always full-screen
-        instl = 1 if is_ctv else (0 if not (v and v.placement == "pre_roll") else 0)
-
-        # metric: IAB viewability / completion rate signals
-        # These provide DSPs with historical performance hints
-        imp_metric: list[dict] = [
-            {
-                "type": "viewability",
-                "value": 0.95 if is_ctv else 0.85,
-                "vendor": "liteads.com",
-            },
-        ]
-
         imp = Imp(
             id="1",
             video=video,
-            displaymanager=display_mgr,
-            displaymanagerver=display_mgr_ver,
-            instl=instl,
             tagid=ad_request.tagid or supply_tag.slot_id,
             bidfloor=effective_floor,
-            bidfloorcur="USD",
             secure=1,
             exp=ad_request.imp_exp or (3600 if is_ctv else 300),
-            rwdd=0,  # Not rewarded by default
-            metric=imp_metric,
         )
 
         # ══════════════════════════════════════════════════════════════
@@ -1042,20 +978,6 @@ class DemandForwarder:
                     # §5.21: 1=Mobile/Tablet, 4=Phone, 5=Tablet
                     device_type = 1
 
-            # ── connectiontype (§5.22) ────────────────────────────
-            # CTV devices are overwhelmingly Ethernet/WiFi
-            conn_type = None
-            if d.connection_type:
-                conn_type = DemandForwarder._CONN_TYPE_MAP.get(
-                    d.connection_type.lower().replace("-", "_").replace(" ", "_")
-                )
-            if conn_type is None and is_ctv:
-                conn_type = 2  # WiFi (most common CTV connection)
-
-            # ── js (JavaScript support) ───────────────────────────
-            # CTV devices generally do NOT support JS/VPAID
-            js = 0 if is_ctv else 1
-
             # ── Canonical OS name ─────────────────────────────────
             raw_os = (d.os or "").strip()
             os_key = raw_os.lower().replace(" ", "")
@@ -1080,15 +1002,6 @@ class DemandForwarder:
             if not dev_ext:
                 dev_ext = None  # type: ignore[assignment]
 
-            # ── Screen resolution & pixel ratio ───────────────────
-            pxratio = None
-            if is_ctv:
-                # 4K CTV displays
-                if d.screen_width and d.screen_width >= 3840:
-                    pxratio = 2.0
-                else:
-                    pxratio = 1.0
-
             device = OrtbDevice(
                 ua=d.ua,
                 ip=ip_v4,
@@ -1099,16 +1012,10 @@ class DemandForwarder:
                 model=d.model,
                 os=canonical_os,
                 osv=d.os_version,
-                hwv=d.model,  # hardware version ≈ model for CTV
                 ifa=d.ifa,
                 lmt=1 if d.lmt else 0,
                 dnt=1 if d.lmt else 0,
-                js=js,
                 language=d.language or "en",
-                connectiontype=conn_type,
-                w=d.screen_width or (1920 if is_ctv else None),
-                h=d.screen_height or (1080 if is_ctv else None),
-                pxratio=pxratio,
                 didsha1=d.didsha1,
                 didmd5=d.didmd5,
                 ext=dev_ext,
@@ -1124,12 +1031,10 @@ class DemandForwarder:
         app_id = ""
         store_url = ""
         cat: list[str] = []
-        sectioncat: list[str] = []
         pagecat: list[str] = []
         app_domain = ""
         publisher_id = ""
         inv_partner_domain = ""
-        app_ver = ""
 
         if ad_request.app:
             a = ad_request.app
@@ -1140,7 +1045,6 @@ class DemandForwarder:
             app_domain = a.app_domain or ""
             publisher_id = a.publisher_id or ""
             inv_partner_domain = a.inventory_partner_domain or ""
-            app_ver = a.app_version or "" if hasattr(a, "app_version") else ""
             if a.app_category:
                 cat = _csv_strs(a.app_category)
             if a.page_categories:
@@ -1199,8 +1103,6 @@ class DemandForwarder:
                 content_cat = _csv_strs(a.content_categories)
                 content_genres = _csv_strs(a.content_genres)
 
-                # sourcerelationship: 1=direct (content belongs to publisher)
-                # embeddable: 1=content can be embedded elsewhere, 0=no
                 content = OrtbContent(
                     id=a.content_id or None,
                     title=a.content_title or None,
@@ -1217,12 +1119,7 @@ class DemandForwarder:
                     prodq=prodq_val,
                     context=a.content_context or (1 if is_ctv else None),  # 1=video
                     qagmediarating=qag_val,
-                    cattax=2,  # IAB Content Category Taxonomy 2.x
                     cat=content_cat or [],
-                    len=a.content_length,
-                    sourcerelationship=1,  # Direct relationship (publisher's own content)
-                    embeddable=0 if is_ctv else 1,
-                    producer={"name": a.content_producer} if a.content_producer else None,
                     network={"name": a.network_name} if a.network_name else None,
                     channel={"name": a.channel_name} if a.channel_name else None,
                 )
@@ -1231,7 +1128,6 @@ class DemandForwarder:
                 # DSPs require it for brand-safety classification
                 content = OrtbContent(
                     context=1,  # video context
-                    sourcerelationship=1,
                     language="en",
                 )
 
@@ -1249,12 +1145,8 @@ class DemandForwarder:
             bundle=app_bundle,
             domain=app_domain or None,
             storeurl=store_url or None,
-            cat=cat or [],
-            sectioncat=sectioncat or [],
+            cat=cat if cat else [],
             pagecat=pagecat or [],
-            ver=app_ver or None,
-            privacypolicy=1,  # IAB recommends always declaring
-            paid=0,           # Free-to-use (most CTV/in-app)
             publisher=publisher,
             content=content,
             inventorypartnerdomain=inv_partner_domain or None,
@@ -1263,7 +1155,7 @@ class DemandForwarder:
 
         # ══════════════════════════════════════════════════════════════
         # 5. USER OBJECT (Section 3.2.20)
-        #    IAB Extended IDs (UID2, RampID), consent signals
+        #    IAB Extended IDs (UID2, RampID)
         # ══════════════════════════════════════════════════════════════
 
         user_ifa = (
@@ -1273,11 +1165,9 @@ class DemandForwarder:
         )
 
         # Build Extended IDs (eids) per IAB §3.2.27
-        # This enables cross-platform identity resolution
         eids: list[dict] = []
         if user_ifa and ad_request.device and ad_request.device.ifa_type:
             ifa_t = ad_request.device.ifa_type.lower()
-            # Map platform IFA type → IAB EID source domain
             eid_source_map: dict[str, str] = {
                 "rida": "roku.com",
                 "afai": "amazon.com",
@@ -1292,77 +1182,34 @@ class DemandForwarder:
                 eids.append({
                     "source": source_domain,
                     "uids": [{"id": user_ifa, "atype": 3}],
-                    # atype=3: Device/hardware ID per §5.28 (AType enum: 3=Device ID)
                 })
 
-        # User consent data per IAB TCF 2.0 spec
-        user_ext: dict | None = None
-        if ad_request.gdpr_consent:
-            user_ext = {"consent": ad_request.gdpr_consent}
-
         user = OrtbUser(
-            id=user_ifa,
             customdata="vast",
             eids=eids,
-            ext=user_ext,
         )
 
         # ══════════════════════════════════════════════════════════════
         # 6. SOURCE OBJECT (Section 3.2.2)
-        #    IAB SupplyChain spec (schain) + Transaction ID
+        #    Transaction ID only — no schain (matches target schema)
         # ══════════════════════════════════════════════════════════════
-
-        # Build schain per IAB SupplyChain 1.0 spec
-        # This provides transparency for the supply path
-        schain = SupplyChain(
-            complete=1,  # 1 = we're the first/only node (complete chain)
-            ver="1.0",
-            nodes=[
-                SupplyChainNode(
-                    asi="liteads.com",          # Canonical SSP domain
-                    sid=supply_tag.slot_id,     # Seller ID
-                    hp=1,                       # 1 = directly paid (header partner)
-                    rid=request_id,             # Request ID at this node
-                    name="LiteAds",
-                    domain="liteads.com",
-                )
-            ],
-        )
 
         source = OrtbSource(
             fd=1,            # 1 = exchange/SSP is responsible for final sale
             tid=request_id,  # Transaction ID (unique per auction)
-            schain=schain,
         )
 
         # ══════════════════════════════════════════════════════════════
         # 7. REGS OBJECT (Section 3.2.3)
-        #    IAB TCF 2.0 + CCPA (us_privacy) + GPP + COPPA
-        #    Always emit regs so DSPs can make compliance decisions
+        #    COPPA + GDPR + CCPA only — no ext, gpp (matches target schema)
         # ══════════════════════════════════════════════════════════════
 
-        # Build ext per industry standard:
-        # gdpr is ALSO placed in regs.ext.gdpr per TCF 2.0 spec
-        # (many DSPs read from ext rather than top-level)
-        regs_ext: dict = {}
         gdpr_val = ad_request.gdpr if ad_request.gdpr is not None else 0
-        if gdpr_val:
-            regs_ext["gdpr"] = gdpr_val
-        if ad_request.gdpr_consent:
-            regs_ext["consent"] = ad_request.gdpr_consent
-        if ad_request.us_privacy:
-            regs_ext["us_privacy"] = ad_request.us_privacy
-
-        # Parse gpp_sid from comma-separated string to int list
-        gpp_sid_list = _csv_ints(ad_request.gpp_sid) if ad_request.gpp_sid else None
 
         regs = OrtbRegs(
             coppa=ad_request.coppa if ad_request.coppa is not None else 0,
             gdpr=gdpr_val,
             us_privacy=ad_request.us_privacy or None,
-            gpp=ad_request.gpp or None,
-            gpp_sid=gpp_sid_list,
-            ext=regs_ext or None,
         )
 
         # ══════════════════════════════════════════════════════════════
@@ -1376,11 +1223,6 @@ class DemandForwarder:
         # 9. ASSEMBLE BidRequest  (Section 3.2.1)
         # ══════════════════════════════════════════════════════════════
 
-        # BidRequest.ext per IAB conventions
-        bidrequest_ext: dict = {}
-        if is_ctv:
-            bidrequest_ext["is_ctv"] = 1
-
         bid_req = BidRequest(
             id=request_id,
             imp=[imp],
@@ -1389,15 +1231,10 @@ class DemandForwarder:
             user=user,
             at=1,            # First-price auction (industry standard since 2019)
             tmax=tmax,
-            cur=["USD"],
-            wlang=["en"],
-            cattax=2,        # IAB Content Category Taxonomy 2.x
             source=source,
             regs=regs,
             bcat=bcat_list,
             badv=badv_list,
-            allimps=0,       # Each imp won independently
-            ext=bidrequest_ext or None,
         )
 
         # ── Final pass: auto-enrich any remaining gaps ────────────
