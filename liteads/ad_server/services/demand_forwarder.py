@@ -111,7 +111,7 @@ def _strip_empty(obj: object) -> object:
 _SLIM_VIDEO_KEYS = {
     "skip", "skipmin", "skipafter", "boxingallowed", "maxextended",
     "pos", "api", "companiontype", "playbackend", "minbitrate", "maxbitrate",
-    "sequence", "battr", "companionad", "ext",
+    "battr", "companionad", "ext",
 }
 _SLIM_IMP_KEYS = {
     "metric", "rwdd", "displaymanager", "displaymanagerver",
@@ -153,6 +153,10 @@ def _slim_payload(payload: dict) -> dict:
     if dev:
         for k in _SLIM_DEVICE_KEYS:
             dev.pop(k, None)
+        # Geo — strip accuracy (not in target schema)
+        geo = dev.get("geo")
+        if geo:
+            geo.pop("accuracy", None)
 
     # App — strip non-essential policy fields
     app = payload.get("app")
@@ -878,6 +882,7 @@ class DemandForwarder:
             placement=placement,
             plcmt=plcmt,
             linearity=linearity,
+            sequence=v.sequence if v and v.sequence else 1,
             playbackmethod=playback,
             delivery=delivery,
             # Ad Pod fields (OpenRTB 2.6 §3.2.7) – DSPs need these
@@ -932,7 +937,6 @@ class DemandForwarder:
                     lon=g.longitude,
                     zip=g.zip_code,
                     type=g.geo_type or (2 if g.latitude else None),  # 2=IP-based
-                    accuracy=100 if g.geo_type == 2 else None,
                     ipservice=g.ipservice,
                 )
 
@@ -950,7 +954,6 @@ class DemandForwarder:
                         lon=_g.lon,
                         zip=_g.zip,
                         type=_g.type,          # 2 = IP-based
-                        accuracy=_g.accuracy,
                         ipservice=_g.ipservice,  # 3 = MaxMind
                     )
                     logger.debug(
