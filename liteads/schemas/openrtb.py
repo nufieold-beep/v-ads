@@ -60,7 +60,9 @@ class Device(BaseModel):
     didsha1: Optional[str] = None
     didmd5: Optional[str] = None
     lmt: Optional[int] = None           # Limit Ad Tracking (0 or 1)
+    carrier: Optional[str] = None        # Carrier / ISP name
     connectiontype: Optional[int] = None  # 1=Ethernet, 2=Wifi, etc.
+    sua: Optional[dict[str, Any]] = None  # Structured User Agent (Section 3.2.29)
     ext: Optional[dict[str, Any]] = None
 
     @property

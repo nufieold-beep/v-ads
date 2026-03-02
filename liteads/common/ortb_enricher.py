@@ -109,9 +109,8 @@ def enrich_bid_request(
             imp.id = "1"
             enriched_fields.append("imp.id")
 
-        tag = slot_id or "SELLER_PLACEMENT_ID"
-        if _set_default(imp, "tagid", tag):
-            enriched_fields.append("imp.tagid")
+        # NOTE: tagid intentionally NOT set — it leaks internal slot IDs
+        # and the target (good) SSP format does not include tagid.
 
         if imp.bidfloor is None:
             imp.bidfloor = 0.01  # minimal floor — let DSP decide

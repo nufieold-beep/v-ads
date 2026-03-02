@@ -26,6 +26,7 @@ import hashlib
 import json
 import re
 import time
+import uuid
 from collections import defaultdict
 from decimal import Decimal
 from typing import Optional, Tuple
@@ -92,13 +93,26 @@ _supply_tag_cache: dict[str, Tuple[float, Optional[object]]] = {}
 _mapping_cache: dict[int, Tuple[float, list]] = {}
 
 
-def _strip_empty(obj: object) -> object:
-    """Recursively strip empty lists/dicts from a JSON-serialisable object."""
+# Keys where an empty list [] or dict {} is semantically meaningful
+# and MUST be preserved in the ORTB payload.
+_KEEP_EMPTY = {"api", "ext", "bcat", "badv"}
+
+
+def _strip_empty(obj: object, _key: str = "") -> object:
+    """Recursively strip empty lists/dicts from a JSON-serialisable object.
+
+    Preserves empty values for keys listed in ``_KEEP_EMPTY`` because DSPs
+    interpret their presence (e.g. ``api: []`` means *no* API support).
+    """
     if isinstance(obj, dict):
         return {
-            k: _strip_empty(v)
+            k: _strip_empty(v, k)
             for k, v in obj.items()
-            if not (isinstance(v, (list, dict)) and len(v) == 0)
+            if not (
+                isinstance(v, (list, dict))
+                and len(v) == 0
+                and k not in _KEEP_EMPTY
+            )
         }
     if isinstance(obj, list):
         return [_strip_empty(i) for i in obj]
@@ -109,19 +123,20 @@ def _strip_empty(obj: object) -> object:
 # Keeps all targeting-critical fields (device.ifa, device.geo, device.ua,
 # device.devicetype, app.bundle, video core fields, pod fields).
 _SLIM_VIDEO_KEYS = {
-    "skip", "skipmin", "skipafter", "boxingallowed", "maxextended",
-    "pos", "api", "companiontype", "playbackend", "minbitrate", "maxbitrate",
+    "skipmin", "skipafter", "maxextended",
+    "pos", "companiontype", "playbackend", "minbitrate", "maxbitrate",
     "battr", "companionad", "ext",
+    "plcmt", "playbackmethod", "delivery",  # not in target SSP format
 }
 _SLIM_IMP_KEYS = {
     "metric", "rwdd", "displaymanager", "displaymanagerver",
-    "instl", "bidfloorcur",
+    "instl", "tagid",  # tagid leaks internal slot IDs
 }
-_SLIM_DEVICE_KEYS = {"hwv", "pxratio", "js", "connectiontype", "w", "h"}
+_SLIM_DEVICE_KEYS = {"hwv", "pxratio", "js", "w", "h"}
 _SLIM_APP_KEYS = {
     "privacypolicy", "paid", "sectioncat", "ver",
 }
-_SLIM_TOP_KEYS = {"cur", "wlang", "cattax", "allimps"}
+_SLIM_TOP_KEYS = {"wlang", "cattax"}
 
 
 def _slim_payload(payload: dict) -> dict:
@@ -153,10 +168,6 @@ def _slim_payload(payload: dict) -> dict:
     if dev:
         for k in _SLIM_DEVICE_KEYS:
             dev.pop(k, None)
-        # Geo — strip accuracy (not in target schema)
-        geo = dev.get("geo")
-        if geo:
-            geo.pop("accuracy", None)
 
     # App — strip non-essential policy fields
     app = payload.get("app")
@@ -177,18 +188,20 @@ def _slim_payload(payload: dict) -> dict:
         source.pop("pchain", None)
         source.pop("ext", None)
 
-    # Regs — strip ext, gpp, gpp_sid (target schema uses top-level only)
+    # Regs — strip ext and gpp string (keep gpp_sid — DSPs need it)
     regs = payload.get("regs")
     if regs:
         regs.pop("ext", None)
         regs.pop("gpp", None)
-        regs.pop("gpp_sid", None)
+        # Rename gpp_sid → gppSid (camelCase) to match real SSP convention
+        if "gpp_sid" in regs:
+            regs["gppSid"] = regs.pop("gpp_sid")
 
-    # User — strip id and ext (target schema uses customdata+eids only)
+    # User — strip verbose fields, keep id + eids
     user = payload.get("user")
     if user:
-        user.pop("id", None)
-        user.pop("ext", None)
+        user.pop("customdata", None)  # never reveal we are a VAST wrapper
+        # Keep user.id and user.ext — DSPs use them for identity
 
     return payload
 
@@ -425,7 +438,7 @@ class DemandForwarder:
             request_id=request_id,
             supply_tag=supply_tag,
             bid_floor=float(endpoint.bid_floor or Decimal("0")),
-            tmax=effective_timeout_ms,
+            tmax=500,  # ORTB convention: 500ms DSP response budget
         )
 
         # Enforce a strict TOTAL timeout (not per-phase) so the DSP
@@ -744,7 +757,8 @@ class DemandForwarder:
 
     # Mapping from OS string → canonical OS name for the ORTB payload
     _OS_CANONICAL: dict[str, str] = {
-        "roku": "Roku", "firetv": "Fire OS", "fireos": "Fire OS",
+        "roku": "Roku", "rokuos": "Roku",
+        "firetv": "Fire OS", "fireos": "Fire OS",
         "tvos": "tvOS", "tizen": "Tizen", "webos": "webOS",
         "webostv": "webOS", "vizio": "SmartCast", "androidtv": "Android",
         "googletv": "Android", "chromecast": "Android",
@@ -882,9 +896,12 @@ class DemandForwarder:
             placement=placement,
             plcmt=plcmt,
             linearity=linearity,
+            skip=0,              # 0 = not skippable (standard for CTV pre-roll)
             sequence=v.sequence if v and v.sequence else 1,
+            boxingallowed=1,     # 1 = allow letter/pillar-boxing
             playbackmethod=playback,
             delivery=delivery,
+            api=[],              # empty = no VPAID/MRAID/OMID
             # Ad Pod fields (OpenRTB 2.6 §3.2.7) – DSPs need these
             poddur=v.pod_duration if v and v.pod_duration else None,
             maxseq=v.max_ads_in_pod if v and v.max_ads_in_pod else None,
@@ -905,12 +922,11 @@ class DemandForwarder:
         )
 
         imp = Imp(
-            id="1",
+            id=uuid.uuid4().hex[:16].upper(),  # random hex like real SSPs
             video=video,
-            tagid=ad_request.tagid or supply_tag.slot_id,
             bidfloor=effective_floor,
+            bidfloorcur="USD",
             secure=1,
-            exp=ad_request.imp_exp or (3600 if is_ctv else 300),
         )
 
         # ══════════════════════════════════════════════════════════════
@@ -923,10 +939,39 @@ class DemandForwarder:
             d = ad_request.device
 
             # ── Geo (§3.2.19) ─────────────────────────────────────
-            # Always enrich geo from MaxMind when publisher doesn't
-            # send it — added value for DSP optimisation.
+            # Always do a MaxMind lookup so we have full geo (lat, lon,
+            # region, metro, city, zip, accuracy) even when publisher
+            # only sends country_code.  DSPs use these for targeting.
             geo = None
-            if ad_request.geo and ad_request.geo.country:
+            _dev_ip = d.ip or ""
+
+            # MaxMind lookup (provides full geo)
+            _maxmind_geo = None
+            if _dev_ip:
+                _g = geoip_lookup(_dev_ip)
+                if _g and _g.country:
+                    _maxmind_geo = _g
+
+            if _maxmind_geo:
+                # Prefer publisher-provided country over MaxMind,
+                # but fill all other fields from MaxMind
+                pub_country = ""
+                if ad_request.geo and ad_request.geo.country:
+                    pub_country = _to_alpha3(ad_request.geo.country)
+                geo = OrtbGeo(
+                    country=pub_country or _maxmind_geo.country,
+                    region=_maxmind_geo.region,
+                    city=_maxmind_geo.city,
+                    metro=_maxmind_geo.metro,
+                    lat=_maxmind_geo.lat,
+                    lon=_maxmind_geo.lon,
+                    zip=_maxmind_geo.zip,
+                    type=2,                        # 2 = IP-based
+                    accuracy=_maxmind_geo.accuracy,  # accuracy radius
+                    ipservice=3,                   # 3 = MaxMind
+                )
+            elif ad_request.geo and ad_request.geo.country:
+                # No MaxMind available — use publisher geo only
                 g = ad_request.geo
                 geo = OrtbGeo(
                     country=_to_alpha3(g.country),
@@ -936,32 +981,9 @@ class DemandForwarder:
                     lat=g.latitude,
                     lon=g.longitude,
                     zip=g.zip_code,
-                    type=g.geo_type or 2,  # 2=IP-based
-                    ipservice=g.ipservice or 3,  # 3=MaxMind (default)
+                    type=g.geo_type or 2,
+                    ipservice=g.ipservice or 3,
                 )
-
-            # Fallback: auto-enrich geo from MaxMind GeoIP using device IP
-            if geo is None:
-                _dev_ip = d.ip or ""
-                if _dev_ip:
-                    _g = geoip_lookup(_dev_ip)
-                    geo = OrtbGeo(
-                        country=_g.country,
-                        region=_g.region,
-                        city=_g.city,
-                        metro=_g.metro,
-                        lat=_g.lat,
-                        lon=_g.lon,
-                        zip=_g.zip,
-                        type=_g.type,          # 2 = IP-based
-                        ipservice=_g.ipservice,  # 3 = MaxMind
-                    )
-                    logger.debug(
-                        "Geo enriched from MaxMind",
-                        ip=_dev_ip,
-                        country=_g.country,
-                        city=_g.city,
-                    )
 
             # ── devicetype (§5.21) ────────────────────────────────
             # Honour publisher's explicit device_type when provided;
@@ -997,30 +1019,59 @@ class DemandForwarder:
             dev_ext: dict = {}
             if d.ifa_type:
                 dev_ext["ifa_type"] = d.ifa_type
-            if d.isp:
-                dev_ext["isp"] = d.isp
             # Additional CTV signals DSPs look for
             if is_ctv:
                 dev_ext["is_ctv"] = 1
             if not dev_ext:
                 dev_ext = None  # type: ignore[assignment]
 
+            # ── carrier (ISP name in ORTB device.carrier) ─────────
+            carrier = d.isp or None
+
+            # ── Structured User Agent (§3.2.29) ──────────────────
+            # Build sua from known device info so DSPs can parse
+            # device signals without regex-parsing the UA string
+            sua = None
+            if d.make or canonical_os:
+                sua_browsers: list[dict] = []
+                if d.make:
+                    sua_browsers.append({"brand": d.make, "version": [""]})
+                sua = {
+                    "browsers": sua_browsers,
+                    "platform": {"brand": canonical_os or ""},
+                    "mobile": 0 if is_ctv else 1,
+                    "source": 3,  # 3 = derived from UA
+                }
+
+            # ── OS version: try to parse from UA if not provided ──
+            osv = d.os_version
+            if not osv and d.ua:
+                import re as _re
+                # Try patterns like "Android 9", "Roku/DVP-14.0"
+                _m = _re.search(r'Android\s+(\d+[\.\d]*)', d.ua)
+                if not _m:
+                    _m = _re.search(r'DVP-(\d+[\.\d]*)', d.ua)
+                if _m:
+                    osv = _m.group(1)
+
             device = OrtbDevice(
                 ua=d.ua,
+                dnt=1 if d.lmt else 0,
                 ip=ip_v4,
                 ipv6=ip_v6,
                 geo=geo,
+                carrier=carrier,
+                language=d.language or "en",
+                os=canonical_os,
+                osv=osv,
                 devicetype=device_type,
                 make=d.make,
                 model=d.model,
-                os=canonical_os,
-                osv=d.os_version,
                 ifa=d.ifa,
                 lmt=1 if d.lmt else 0,
-                dnt=1 if d.lmt else 0,
-                language=d.language or "en",
                 didsha1=d.didsha1,
                 didmd5=d.didmd5,
+                sua=sua,
                 ext=dev_ext,
             )
 
@@ -1065,11 +1116,15 @@ class DemandForwarder:
             app_id = app_bundle
 
         # ── Publisher (§3.2.15) ───────────────────────────────────
-        # Always provide a publisher object – DSPs use it for ads.txt
+        # Provide a publisher object with a stable numeric-looking ID
+        # Never leak internal slot names (ctv_preroll, etc.)
+        if publisher_id:
+            pub_id = publisher_id
+        else:
+            # Deterministic numeric ID from the app bundle
+            pub_id = str(int(hashlib.md5(app_bundle.encode()).hexdigest()[:6], 16))
         publisher = OrtbPublisher(
-            id=publisher_id or supply_tag.slot_id,
-            name=app_name or None,
-            domain=app_domain or None,
+            id=pub_id,
         )
 
         # ── Content (§3.2.16) ────────────────────────────────────
@@ -1118,6 +1173,7 @@ class DemandForwarder:
                     url=a.content_url or None,
                     language=a.content_language or "en",
                     livestream=a.content_livestream,
+                    len=a.content_length,
                     contentrating=a.content_rating or None,
                     prodq=prodq_val,
                     context=a.content_context or (1 if is_ctv else None),  # 1=video
@@ -1187,9 +1243,20 @@ class DemandForwarder:
                     "uids": [{"id": user_ifa, "atype": 3}],
                 })
 
+        # Generate a deterministic user.id from IFA (same user = same ID)
+        # or from IP+UA when IFA is missing — matches how real SSPs work
+        if user_ifa:
+            user_id = hashlib.md5(user_ifa.encode()).hexdigest()[:16]
+        elif ad_request.device:
+            seed = (ad_request.device.ip or "") + (ad_request.device.ua or "")
+            user_id = hashlib.md5(seed.encode()).hexdigest()[:16]
+        else:
+            user_id = uuid.uuid4().hex[:16]
+
         user = OrtbUser(
-            customdata="vast",
+            id=user_id,
             eids=eids,
+            ext={},
         )
 
         # ══════════════════════════════════════════════════════════════
@@ -1207,19 +1274,17 @@ class DemandForwarder:
         #    COPPA + GDPR + CCPA only — no ext, gpp (matches target schema)
         # ══════════════════════════════════════════════════════════════
 
-        gdpr_val = ad_request.gdpr if ad_request.gdpr is not None else 0
-
         regs = OrtbRegs(
             coppa=ad_request.coppa if ad_request.coppa is not None else 0,
-            gdpr=gdpr_val,
             us_privacy=ad_request.us_privacy or None,
+            gpp_sid=[0],  # GPP section IDs (0 = no section applies)
         )
 
         # ══════════════════════════════════════════════════════════════
         # 8. BLOCKED SIGNALS (Section 3.2.1)
         # ══════════════════════════════════════════════════════════════
 
-        bcat_list = _csv_strs(ad_request.bcat) if ad_request.bcat else []
+        bcat_list = _csv_strs(ad_request.bcat) if ad_request.bcat else ["IAB26"]
         badv_list = _csv_strs(ad_request.badv) if ad_request.badv else []
 
         # ══════════════════════════════════════════════════════════════
@@ -1236,8 +1301,11 @@ class DemandForwarder:
             tmax=tmax,
             source=source,
             regs=regs,
+            allimps=0,       # 0 = exchange cannot verify all impressions
+            cur=["USD"],
             bcat=bcat_list,
             badv=badv_list,
+            ext={},
         )
 
         # ── Final pass: auto-enrich any remaining gaps ────────────
