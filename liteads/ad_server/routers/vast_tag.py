@@ -588,13 +588,12 @@ async def vast_tag(
     # Choose InLine vs Wrapper depending on creative type
     if _adm_raw:
         # Demand ORTB bid with inline VAST XML (adm field)
-        # Inject our error pixel + tracking events into the DSP's VAST XML.
-        # We do NOT inject <Impression> here because the DSP's adm already
-        # contains its own <Impression> tag; adding a second one causes
-        # CTV players to fire double impressions.
+        # Inject our error pixel + tracking events + impression pixel into the DSP's VAST XML.
+        # Note: We must inject our own <Impression> alongside the DSP's to ensure revenue/delivery 
+        # is counted on our backend. VAST standard supports multiple <Impression> pixels.
         vast_xml = _inject_tracking_into_adm(
             adm=_adm_raw,
-            impression_url="",          # deliberately empty — avoid double impression
+            impression_url=impression_url,
             error_url=error_url,
             tracking_events=tracking_events,
         )
