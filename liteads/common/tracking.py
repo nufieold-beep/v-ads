@@ -146,6 +146,20 @@ def build_click_tracking_url(
 
 
 # ---------------------------------------------------------------------------
+# Ad ID builder
+# ---------------------------------------------------------------------------
+
+def build_ad_id(campaign_id: int, creative_id: int) -> str:
+    """Build the standard ad identifier used in tracking URLs and VAST XML.
+
+    Format: ``"ad_{campaign_id}_{creative_id}"``
+
+    Previously duplicated across ad.py, openrtb_service.py, and vast_tag.py.
+    """
+    return f"ad_{campaign_id}_{creative_id}"
+
+
+# ---------------------------------------------------------------------------
 # Demand-analytics suffix builder
 # ---------------------------------------------------------------------------
 

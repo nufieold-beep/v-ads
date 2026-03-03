@@ -33,6 +33,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from liteads.ad_server.services.ad_service import AdService
 from liteads.ad_server.services.demand_forwarder import DemandForwarder
 from liteads.ad_server.services.event_service import EventService
+from liteads.ad_server.services.vast_builder import build_vast_for_candidate
 from liteads.common.config import get_settings
 from liteads.common.database import get_session
 from liteads.common.device import (
@@ -44,8 +45,8 @@ from liteads.common.device import (
 from liteads.common.geoip import lookup as geoip_lookup
 from liteads.common.logger import get_logger, log_context
 from liteads.common.tracking import (
+    build_ad_id,
     build_burl,
-    build_click_tracking_url,
     build_demand_extra_params,
     build_error_url,
     build_impression_url,
@@ -55,7 +56,7 @@ from liteads.common.tracking import (
     empty_vast_xml,
 )
 from liteads.common.utils import generate_request_id
-from liteads.common.vast import TrackingEvent, build_vast_xml, build_vast_wrapper_xml
+from liteads.common.vast import TrackingEvent
 from liteads.schemas.request import (
     AdRequest,
     AppInfo,
@@ -102,7 +103,6 @@ def _get_demand_forwarder() -> DemandForwarder:
 _detect_env = detect_environment
 _detect_ifa_type = infer_ifa_type
 _placement_from_params = map_placement
-
 
 # ---------------------------------------------------------------------------
 # GET /api/vast – VAST Tag endpoint
@@ -271,7 +271,7 @@ async def vast_tag(
     if not ua_str:
         ua_str = (request.headers.get("user-agent") or "").strip()
     if not os_str and ua_str:
-        os_str = _infer_os_from_ua(ua_str)
+        os_str = infer_os_from_ua(ua_str)
 
     env = _detect_env(os_str, ua_str, device_type)
     make = (device_make or "").strip()
@@ -530,7 +530,7 @@ async def vast_tag(
 
     # Take first candidate -------------------------------------------------
     candidate = candidates[0]
-    ad_id = f"ad_{candidate.campaign_id}_{candidate.creative_id}"
+    ad_id = build_ad_id(candidate.campaign_id, candidate.creative_id)
     base_url = _resolve_base_url(request, settings)
 
     # Build tracking query params with demand source info for analytics
@@ -590,7 +590,9 @@ async def vast_tag(
         if _parsed["ad_id"]:
             ad_id = _parsed["ad_id"]
         if _parsed["creative_id"]:
-            # Rebuild tracking URLs with the real creative info
+            # Rebuild tracking URLs with the real creative info from the DSP VAST.
+            # The creative ID here is a raw string from the XML (may be non-numeric),
+            # so we build the tracking key directly rather than via build_ad_id().
             _real_crid = _parsed["creative_id"]
             ad_id = f"ad_{candidate.campaign_id}_{_real_crid}"
             tracking_events = build_tracking_events(
@@ -620,59 +622,46 @@ async def vast_tag(
                 _fire_win_notice(demand_nurl, candidate.bid)
             )
     elif candidate.vast_url:
-        # Wrapper – redirect player to external VAST tag.
-        # No <Impression> in wrapper: the downstream VAST already has
-        # its own impression pixel; including ours would double-fire.
-        click_tracking_url = build_click_tracking_url(
-            base_url, request_id, ad_id, env,
-        )
-        vast_xml = build_vast_wrapper_xml(
-            version=vast_version,
+        # Wrapper or InLine – delegate to shared helper.
+        vast_xml = build_vast_for_candidate(
+            candidate,
+            vast_version=vast_version,
             ad_id=ad_id,
-            creative_id=str(candidate.creative_id),
-            vast_tag_uri=candidate.vast_url,
-            ad_title=candidate.title or "Video Ad",
-            impression_urls=[],          # no impression — avoid double-fire
-            error_urls=[error_url],
             tracking_events=tracking_events,
-            click_tracking=[click_tracking_url],
+            impression_url=impression_url,
+            error_url=error_url,
+            base_url=base_url,
+            request_id=request_id,
+            env=env,
+            width=w,
+            height=h,
             nurl=nurl,
             burl=burl,
-            price=round(candidate.bid, 4),
         )
     else:
-        # InLine – direct video creative
-        # Only serve impression/tracking when a real MediaFile exists;
-        # this prevents phantom impressions on empty creatives.
-        if not candidate.video_url:
+        # InLine – direct video creative.
+        vast_xml = build_vast_for_candidate(
+            candidate,
+            vast_version=vast_version,
+            ad_id=ad_id,
+            tracking_events=tracking_events,
+            impression_url=impression_url,
+            error_url=error_url,
+            base_url=base_url,
+            request_id=request_id,
+            env=env,
+            width=w,
+            height=h,
+            nurl=nurl,
+            burl=burl,
+        )
+        if vast_xml is None:
             logger.warning(
                 "InLine candidate has no video_url – returning no-fill",
                 request_id=request_id,
                 ad_id=ad_id,
             )
             return _empty_vast_response(request_id)
-
-        vast_xml = build_vast_xml(
-            version=vast_version,
-            ad_id=ad_id,
-            creative_id=str(candidate.creative_id),
-            ad_title=candidate.title or "Video Ad",
-            duration=candidate.duration or 30,
-            video_url=candidate.video_url,
-            video_mime=candidate.mime_type or "video/mp4",
-            bitrate=candidate.bitrate or 2500,
-            width=w,
-            height=h,
-            click_through=candidate.landing_url,
-            skip_offset=candidate.skip_after if candidate.skippable else None,
-            impression_urls=[impression_url],
-            error_urls=[error_url],
-            tracking_events=tracking_events,
-            companion_image_url=candidate.companion_image_url,
-            nurl=nurl,
-            burl=burl,
-            price=round(candidate.bid, 4),
-        )
 
     logger.info(
         "VAST tag served",
@@ -803,11 +792,6 @@ async def _fire_win_notice(nurl: str, price: float) -> None:
         await client.get(resolved_url, timeout=2.0)
     except Exception as exc:
         logger.warning("Win notice failed: %s", str(exc))
-
-
-def _infer_os_from_ua(ua: str) -> str:
-    """Try to infer OS from User-Agent string (delegated to common.device)."""
-    return infer_os_from_ua(ua)
 
 
 def _resolve_base_url(request: Request, settings: Any) -> str:
