@@ -122,8 +122,13 @@ class EventService:
 
             # Resolve environment to int (shared mapping)
             env_int = ENV_TO_INT.get(environment) if environment else None
-
-            # ---- Impression deduplication ----
+        
+        # HOTFIX: somehow video_position receives 'ctv' string in production!
+        if isinstance(video_position, str):
+            try:
+                video_position = int(video_position)
+            except ValueError:
+                video_position = None
             # Prevent double-billing when both burl and VAST pixel fire
             # for the same (request_id, campaign_id) pair.
             is_dedup = False
