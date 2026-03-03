@@ -13,6 +13,7 @@ from liteads.common.config import get_settings
 from liteads.common.database import get_session
 from liteads.common.logger import get_logger, log_context
 from liteads.common.tracking import (
+    build_ad_id,
     build_burl,
     build_nurl,
     empty_vast_headers,
@@ -129,7 +130,7 @@ async def request_ads(
     base_url = str(request.base_url).rstrip("/")
 
     for candidate in candidates[: ad_request.num_ads]:
-        ad_id = f"ad_{candidate.campaign_id}_{candidate.creative_id}"
+        ad_id = build_ad_id(candidate.campaign_id, candidate.creative_id)
 
         # Build VAST tracking URLs
         tracking = _build_tracking_urls(

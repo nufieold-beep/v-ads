@@ -12,6 +12,7 @@ from typing import Optional
 
 from liteads.ad_server.services.ad_service import AdService
 from liteads.ad_server.services.pod_service import PodBuilder, PodConfig
+from liteads.ad_server.services.vast_builder import build_vast_for_candidate
 from liteads.common.config import get_settings
 from liteads.common.device import (
     infer_ifa_type,
@@ -21,15 +22,15 @@ from liteads.common.device import (
 )
 from liteads.common.logger import get_logger
 from liteads.common.tracking import (
+    build_ad_id,
     build_burl,
-    build_click_tracking_url,
     build_error_url,
     build_impression_url,
     build_lurl,
     build_nurl,
     build_tracking_events,
 )
-from liteads.common.vast import TrackingEvent, build_vast_xml, build_vast_wrapper_xml
+from liteads.common.vast import TrackingEvent
 from liteads.schemas.openrtb import (
     Bid,
     BidRequest,
@@ -394,7 +395,7 @@ class OpenRTBService:
 
         for idx, candidate in enumerate(candidates):
             imp = br.imp[idx] if idx < len(br.imp) else br.imp[0]
-            ad_id = f"ad_{candidate.campaign_id}_{candidate.creative_id}"
+            ad_id = build_ad_id(candidate.campaign_id, candidate.creative_id)
 
             # Build VAST XML (adm)
             tracking_events = build_tracking_events(
@@ -417,45 +418,22 @@ class OpenRTBService:
             #   downstream VAST already has its own; two would double-fire.
             # - InLine is only emitted when the candidate has a real
             #   video_url (i.e. a <MediaFile> will exist in the VAST).
-            if candidate.vast_url:
-                # Wrapper – external VAST tag (e.g. demand/DSP response)
-                click_tracking_url = build_click_tracking_url(
-                    base_url, request_id, ad_id, env,
-                )
-                vast_xml = build_vast_wrapper_xml(
-                    version=vast_version,
-                    ad_id=ad_id,
-                    creative_id=str(candidate.creative_id),
-                    vast_tag_uri=candidate.vast_url,
-                    ad_title=candidate.title or "Video Ad",
-                    impression_urls=[],          # no impression — avoid double-fire
-                    error_urls=[error_url],
-                    tracking_events=tracking_events,
-                    click_tracking=[click_tracking_url],
-                    price=round(candidate.bid, 4),
-                )
-            elif candidate.video_url:
-                # InLine – direct video creative (MediaFile present)
-                vast_xml = build_vast_xml(
-                    version=vast_version,
-                    ad_id=ad_id,
-                    creative_id=str(candidate.creative_id),
-                    ad_title=candidate.title or "Video Ad",
-                    duration=candidate.duration or 30,
-                    video_url=candidate.video_url,
-                    video_mime=candidate.mime_type or "video/mp4",
-                    bitrate=candidate.bitrate or 2500,
-                    width=candidate.width,
-                    height=candidate.height,
-                    click_through=candidate.landing_url,
-                    skip_offset=candidate.skip_after if candidate.skippable else None,
-                    impression_urls=[impression_url],
-                    error_urls=[error_url],
-                    tracking_events=tracking_events,
-                    companion_image_url=candidate.companion_image_url,
-                    price=round(candidate.bid, 4),
-                )
-            else:
+            # nurl/burl are carried in the Bid object (not the VAST XML)
+            # for OpenRTB, so they are not passed here.
+            vast_xml = build_vast_for_candidate(
+                candidate,
+                vast_version=vast_version,
+                ad_id=ad_id,
+                tracking_events=tracking_events,
+                impression_url=impression_url,
+                error_url=error_url,
+                base_url=base_url,
+                request_id=request_id,
+                env=env,
+                width=candidate.width or 1920,
+                height=candidate.height or 1080,
+            )
+            if vast_xml is None:
                 # No media file — skip this candidate to avoid phantom impressions
                 logger.warning(
                     "Skipping candidate with no video_url or vast_url",
