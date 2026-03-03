@@ -2,7 +2,8 @@
 Video event tracking service for CPM CTV and In-App.
 
 Handles recording VAST-standard video events and CPM-based billing.
-Cost is calculated and recorded on IMPRESSION events using CPM bid / 1000.
+Events are persisted to PostgreSQL and aggregated in Redis pipelines for
+real-time dashboard analytics, without blocking ad delivery paths.
 """
 
 from __future__ import annotations
@@ -13,6 +14,7 @@ from typing import Any
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
+import redis.asyncio as redis
 
 from liteads.common.cache import CacheKeys, redis_client
 from liteads.common.logger import get_logger
@@ -28,9 +30,13 @@ from liteads.ad_server.middleware.metrics import (
 
 logger = get_logger(__name__)
 
-# ── Module-level constants (avoid re-creation per call) ──────────────────
+# ── Module-level constants ───────────────────────────────────────────────
 _DECIMAL_1000 = Decimal("1000")
 _DECIMAL_ZERO = Decimal("0.000000")
+_CACHE_TTL_STATS = 48 * 3600       # 48 hours for hourly statistics retention
+_CACHE_TTL_BUDGET = 2 * 86400      # 2 days for budget tracking
+_CACHE_TTL_DEDUP = 3600            # 1 hour for impression deduplication
+
 _EVENT_TYPE_MAP: dict[str, int] = {
     # Core VAST events
     "impression": EventType.IMPRESSION,
@@ -81,7 +87,11 @@ _STAT_FIELD_MAP: dict[int, str] = {
 
 
 class EventService:
-    """Video event tracking service with CPM billing."""
+    """
+    Video event tracking service with robust failure handling and CPM billing logic.
+    Maintains clean pathways between database persistence and real-time cache counters
+    to feed accurately into dashboard analytics.
+    """
 
     def __init__(self, session: AsyncSession):
         self.session = session
@@ -94,7 +104,7 @@ class EventService:
         user_id: str | None = None,
         timestamp: int | None = None,
         environment: str | None = None,
-        video_position: int | None = None,
+        video_position: Any | None = None,  # Accepts Any explicitly for sanitization
         extra: dict[str, Any] | None = None,
         ip_address: str | None = None,
         win_price: float = 0.0,
@@ -104,153 +114,70 @@ class EventService:
         country_code: str | None = None,
     ) -> bool:
         """
-        Track a video ad event.
-
-        Events are:
-        1. Persisted to database for billing/reporting
-        2. Cached in Redis for real-time stats
-        3. Used for frequency control updates (on impression)
-        4. CPM cost is charged on IMPRESSION events
+        Main entry point for tracking an ad event. 
+        Sanitizes input, prevents duplication, handles analytics calculations
+        in Postgres, pushes updates to Redis, and reports to Prometheus.
         """
         try:
+            # 1. Parsing & Sanitization
             campaign_id, creative_id = self._parse_ad_id(ad_id)
-
             event_type_enum = self._get_event_type(event_type)
             if event_type_enum is None:
-                logger.warning(f"Unknown video event type: {event_type}")
+                logger.warning(f"Unknown video event type ignored: {event_type}")
                 return False
 
-            # Resolve environment to int (shared mapping)
             env_int = ENV_TO_INT.get(environment) if environment else None
-        
-            # HOTFIX: somehow video_position receives 'ctv' string in production!
-            if isinstance(video_position, str):
-                try:
-                    video_position = int(video_position)
-                except ValueError:
-                    video_position = None
-            # Prevent double-billing when both burl and VAST pixel fire
-            # for the same (request_id, campaign_id) pair.
-            is_dedup = False
-            if event_type_enum == EventType.IMPRESSION and campaign_id is not None:
-                dedup_key = f"imp_dedup:{request_id}:{campaign_id}"
-                is_new = await redis_client.set(
-                    dedup_key, "1", ttl=3600, nx=True,
-                )
-                # is_new == True  → key was just created (first impression)
-                # is_new == False → key already existed  (duplicate)
-                if not is_new:
-                    # Impression already recorded — still persist event for
-                    # audit trail but skip billing and counter increments.
-                    logger.info(
-                        "Duplicate impression suppressed",
-                        request_id=request_id,
-                        campaign_id=campaign_id,
-                    )
-                    is_dedup = True
+            safe_video_position = self._sanitize_video_position(video_position)
 
-            # Calculate CPM cost on impression (skip for deduplicated events)
-            cost = _DECIMAL_ZERO
-            if not is_dedup and event_type_enum == EventType.IMPRESSION and campaign_id is not None:
-                if campaign_id > 0:
-                    # Local campaign — look up CPM from DB
-                    cost = await self._calculate_cpm_cost(campaign_id)
-                elif win_price > 0:
-                    # Demand fill — cost = bid_price / 1000 (CPM → per-impression)
-                    cost = Decimal(win_price) / Decimal(1000)
+            # 2. Impression Deduplication
+            is_dedup = await self._is_duplicate_impression(
+                request_id, campaign_id, event_type_enum
+            )
 
-            # Build & persist AdEvent (single construction for both paths)
-            event = AdEvent(
+            # 3. Analytics Accounting (Cost)
+            cost = await self._calculate_event_cost(
+                event_type_enum, campaign_id, win_price, is_dedup
+            )
+            
+            # Format win price accurately for DB representation
+            safe_win_price = Decimal(str(round(win_price, 6))) if win_price else Decimal("0")
+            event_time = datetime.fromtimestamp(timestamp, tz=timezone.utc) if timestamp else datetime.now(timezone.utc)
+
+            # 4. PostgreSQL Database Persistence
+            await self._persist_event_to_db(
                 request_id=request_id,
                 campaign_id=campaign_id,
                 creative_id=creative_id,
                 event_type=event_type_enum,
-                event_time=datetime.fromtimestamp(timestamp, tz=timezone.utc)
-                if timestamp
-                else datetime.now(timezone.utc),
+                event_time=event_time,
                 user_id=user_id,
                 ip_address=ip_address,
                 cost=cost,
-                win_price=Decimal(str(round(win_price, 6))) if win_price else Decimal("0"),
+                win_price=safe_win_price,
                 adomain=adomain,
                 source_name=source_name,
                 bundle_id=bundle_id,
                 country_code=country_code,
-                video_position=video_position,
+                video_position=safe_video_position,
                 environment=env_int,
             )
-            self.session.add(event)
-            await self.session.flush()
 
+            # Re-verify deduplication to decide if we should update statistical caches
+            # We persist duplicates for auditing, but don't count them for metrics/billing
             if is_dedup:
                 return True
 
-            # ── Batch all Redis updates into a single pipeline ─────
-            # Previously 3-5 separate round-trips; now 1.
-            hour = current_hour()
-            stat_key = CacheKeys.stat_hourly(campaign_id, hour) if campaign_id is not None else None
+            # 5. Redis Dashboard Analytics & Spend Pipelining
+            await self._update_redis_analytics_pipeline(
+                campaign_id=campaign_id,
+                event_type_enum=event_type_enum,
+                user_id=user_id,
+                cost=cost,
+                win_price=win_price,
+            )
 
-            pipe = redis_client.pipeline()
-
-            # 1. Real-time stat counter
-            if stat_key:
-                field_name = _STAT_FIELD_MAP.get(
-                    EventType(event_type_enum) if event_type_enum in EventType else event_type_enum  # type: ignore[arg-type]
-                )
-                if field_name:
-                    pipe.hincrby(stat_key, field_name, 1)
-                if event_type_enum == EventType.WIN and win_price > 0:
-                    pipe.hincrby(stat_key, "wins", 1)
-                    pipe.hincrbyfloat(stat_key, "win_price_sum", win_price)
-                pipe.expire(stat_key, 48 * 3600)
-
-            # 2. Budget spend + hourly spend (impression only)
-            if event_type_enum == EventType.IMPRESSION and campaign_id is not None:
-                if cost > 0:
-                    today = current_date()
-                    budget_key = f"budget:{campaign_id}:{today}"
-                    pipe.hincrbyfloat(budget_key, "spent_today", float(cost))
-                    pipe.hincrbyfloat(budget_key, "spent_total", float(cost))
-                    pipe.expire(budget_key, 86400 * 2)
-                    if stat_key:
-                        pipe.hincrbyfloat(stat_key, "spend", float(cost))
-
-            # 3. Frequency counter (impression + has user_id)
-            if event_type_enum == EventType.IMPRESSION and user_id and campaign_id is not None:
-                today = current_date()
-                daily_key = CacheKeys.freq_daily(user_id, campaign_id, today)
-                hourly_key = CacheKeys.freq_hourly(user_id, campaign_id, hour)
-                pipe.incr(daily_key)
-                pipe.expire(daily_key, 24 * 3600)
-                pipe.incr(hourly_key)
-                pipe.expire(hourly_key, 3600)
-
-            await pipe.execute()
-
-            # ── Prometheus delivery-health metrics ─────────────────
-            cid_str = str(campaign_id) if campaign_id else "unknown"
-            try:
-                if event_type_enum == EventType.ERROR:
-                    err_code = (extra or {}).get("error_code", "unknown")
-                    record_vast_error(str(err_code), cid_str)
-                elif event_type_enum == EventType.IMPRESSION:
-                    record_quartile("impression", cid_str)
-                elif event_type_enum == EventType.START:
-                    record_ad_start(cid_str)
-                    record_quartile("start", cid_str)
-                elif event_type_enum == EventType.FIRST_QUARTILE:
-                    record_quartile("firstQuartile", cid_str)
-                elif event_type_enum == EventType.MIDPOINT:
-                    record_quartile("midpoint", cid_str)
-                elif event_type_enum == EventType.THIRD_QUARTILE:
-                    record_quartile("thirdQuartile", cid_str)
-                elif event_type_enum == EventType.COMPLETE:
-                    record_ad_completion(cid_str)
-                    record_quartile("complete", cid_str)
-                elif event_type_enum == EventType.SKIP:
-                    record_ad_skip(cid_str)
-            except Exception:
-                pass  # Metrics must never break event tracking
+            # 6. Prometheus Export
+            self._update_prometheus_metrics(campaign_id, event_type_enum, extra)
 
             logger.debug(
                 "Video event tracked",
@@ -258,128 +185,277 @@ class EventService:
                 campaign_id=campaign_id,
                 cost=str(cost),
             )
-
             return True
 
         except Exception as e:
-            logger.error(f"Failed to track video event: {e}")
-            # Rollback session so the context-manager commit doesn't hit
-            # PendingRollbackError and blow up the request lifecycle.
+            logger.error(f"Failed to track video event safely: {e}", exc_info=True)
+            # Ensure DB rollback safely prevents lifecycle poisoning
             try:
                 await self.session.rollback()
             except Exception:
                 pass
             return False
 
-    def _parse_ad_id(self, ad_id: str) -> tuple[int | None, int | None]:
-        """Parse ad ID to extract campaign and creative IDs.
+    # ──────────────────────────────────────────────────────────────────
+    # Helper Sub-Methods for `track_event`
+    # ──────────────────────────────────────────────────────────────────
 
-        For demand fills, campaign_id is 0 and creative_id is a random hash.
-        We store campaign_id=0 in the DB (FK constraints removed) and keep
-        the creative hash for correlation with demand partner reporting.
+    def _sanitize_video_position(self, video_position: Any) -> int | None:
         """
+        Safety converter: ensures video_position is castable to integer.
+        Mitigates fatal crash when tracking VAST macros inject string values like 'ctv'.
+        """
+        if video_position is None:
+            return None
         try:
-            parts = ad_id.split("_")
-            if len(parts) >= 3:
-                cid_str, crid_str = parts[1], parts[2]
-                try:
-                    cid = int(cid_str)
-                except ValueError:
-                    return None, None
-                try:
-                    crid = int(crid_str)
-                    if cid == 0:
-                        crid = None  # DB still has FK constraints for creative_id!
-                except ValueError:
-                    crid = None  # Fallback to None if DSP gave us a string/hex ID
-                return cid if cid >= 0 else None, crid
-            elif len(parts) >= 2:
-                cid = int(parts[1])
-                return cid if cid >= 0 else None, None
-            else:
-                try:
-                    return int(ad_id), None
-                except ValueError:
-                    # If it's pure string like DSP ad_id without 'ad_0_', default to 0 for DSP analytics
-                    return 0, None  
-        except (ValueError, IndexError):
-            logger.warning(f"Invalid ad_id format: {ad_id}")
+            return int(video_position)
+        except (ValueError, TypeError):
+            return None
+
+    def _parse_ad_id(self, ad_id: str) -> tuple[int | None, int | None]:
+        """
+        Safely extracts campaign_id and creative_id without tripping PostgreSQL
+        ForeignKey exceptions when arbitrary DSP strings map over tracking links.
+        """
+        if not ad_id:
             return None, None
 
-    def _get_event_type(self, event_type: str) -> int | None:
-        """Convert VAST event type string to enum.
+        parts = ad_id.split("_")
+        
+        try:
+            if len(parts) >= 3:
+                # Format: ad_{campaign_id}_{creative_id}
+                cid = self._safe_int(parts[1])
+                crid = self._safe_int(parts[2])
+                
+                # Rule: DSP fills often use campaign `0`. Local DB enforces FK on real creatives.
+                if cid == 0:
+                    crid = None
+                    
+                return (cid if cid is not None and cid >= 0 else None, crid)
+                
+            elif len(parts) >= 2:
+                # Format: ad_{campaign_id}
+                cid = self._safe_int(parts[1])
+                return (cid if cid is not None and cid >= 0 else None, None)
+                
+            else:
+                # Format: {raw_id}
+                cid = self._safe_int(ad_id)
+                return (cid, None) if cid is not None else (0, None)
+                
+        except Exception as e:
+            logger.warning(f"Failed to parse ad_id format: {ad_id} | error: {e}")
+            return None, None
 
-        Supports all VAST 2.x–4.x event names, plus OpenRTB loss.
-        """
+    def _safe_int(self, value: Any) -> int | None:
+        """Convert arbitrary input to integer, silencing standard exceptions."""
+        try:
+            return int(value)
+        except (ValueError, TypeError):
+            return None
+
+    def _get_event_type(self, event_type: str) -> int | None:
+        """Convert standard VAST strings to internal system EventType mappings."""
+        if not event_type:
+            return None
         return _EVENT_TYPE_MAP.get(event_type.lower())
 
-    async def _calculate_cpm_cost(self, campaign_id: int) -> Decimal:
-        """Calculate CPM cost per impression.
-
-        CPM cost per impression = bid_amount / 1000
+    async def _is_duplicate_impression(
+        self, request_id: str, campaign_id: int | None, event_type_enum: int
+    ) -> bool:
         """
+        Prevents double-billing/analytics counting for when the BURL pixel 
+        AND VAST tracker pixel naturally hit simultaneously for one request_id.
+        """
+        if event_type_enum != EventType.IMPRESSION or campaign_id is None:
+            return False
+
+        dedup_key = f"imp_dedup:{request_id}:{campaign_id}"
+        is_new = await redis_client.set(dedup_key, "1", ttl=_CACHE_TTL_DEDUP, nx=True)
+        
+        # is_new = True indicates fresh key creation.
+        # is_new = False indicates it just collided
+        if not is_new:
+            logger.info("Duplicate impression suppressed", request_id=request_id, campaign_id=campaign_id)
+            return True
+        return False
+
+    async def _calculate_event_cost(
+        self, 
+        event_type_enum: int, 
+        campaign_id: int | None, 
+        win_price: float, 
+        is_dedup: bool
+    ) -> Decimal:
+        """Derive the precise Decimal CPM cost to charge if this is an actionable impression."""
+        if is_dedup or event_type_enum != EventType.IMPRESSION or campaign_id is None:
+            return _DECIMAL_ZERO
+            
+        if campaign_id > 0:
+            # First-party local campaign - lookup fixed CPM bid from db/cache
+            return await self._calculate_cpm_cost(campaign_id)
+        elif win_price > 0:
+            # Third-party demand fill - calculate immediate cost from dynamic macro
+            return Decimal(str(win_price)) / _DECIMAL_1000
+            
+        return _DECIMAL_ZERO
+
+    async def _calculate_cpm_cost(self, campaign_id: int) -> Decimal:
+        """Fetch local campaign DB bid amounts specifically cached into Redis."""
         try:
-            # Try cache first
             cache_key = f"campaign:cpm:{campaign_id}"
             cached_cpm = await redis_client.get(cache_key)
             if cached_cpm:
-                return Decimal(cached_cpm) / _DECIMAL_1000
+                return Decimal(cached_cpm.decode('utf-8') if isinstance(cached_cpm, bytes) else str(cached_cpm)) / _DECIMAL_1000
 
-            # Fall back to DB
+            # Fall back to DB resolving single record scalar
             result = await self.session.execute(
                 select(Campaign.bid_amount).where(Campaign.id == campaign_id)
             )
             bid_amount = result.scalar()
-            if bid_amount:
-                # Cache the CPM bid for 5 minutes
+            
+            if bid_amount is not None:
                 await redis_client.set(cache_key, str(bid_amount), ttl=300)
                 return Decimal(str(bid_amount)) / _DECIMAL_1000
 
             return _DECIMAL_ZERO
         except Exception as e:
             logger.warning(f"Failed to calculate CPM cost for campaign {campaign_id}: {e}")
-            return Decimal("0.000000")
+            return _DECIMAL_ZERO
 
-    # ------------------------------------------------------------------
-    # Ad request / opportunity tracking (called from router layer)
-    # ------------------------------------------------------------------
+    async def _persist_event_to_db(self, **kwargs: Any) -> None:
+        """Constructs and injects an `AdEvent` payload precisely into the tracking database."""
+        event = AdEvent(**kwargs)
+        self.session.add(event)
+        await self.session.flush()
+
+    async def _update_redis_analytics_pipeline(
+        self, 
+        campaign_id: int | None, 
+        event_type_enum: int, 
+        user_id: str | None, 
+        cost: Decimal, 
+        win_price: float
+    ) -> None:
+        """
+        Generates robust bulk updates for all Dashboard aggregation settings in one operation block.
+        Ensuring absolute consistency in the redis counters for active queries.
+        """
+        hour = current_hour()
+        stat_key = CacheKeys.stat_hourly(campaign_id, hour) if campaign_id is not None else None
+        
+        # We start one network pipeline connection
+        pipe = redis_client.pipeline()
+
+        # 1. Update Core Statistical Dashboard Counters Map
+        if stat_key:
+            field_name = _STAT_FIELD_MAP.get(
+                EventType(event_type_enum) if event_type_enum in EventType else event_type_enum  # type: ignore[arg-type]
+            )
+            if field_name:
+                pipe.hincrby(stat_key, field_name, 1)
+                
+            # If win event recorded via tracker
+            if event_type_enum == EventType.WIN and win_price > 0:
+                pipe.hincrby(stat_key, "wins", 1)
+                pipe.hincrbyfloat(stat_key, "win_price_sum", win_price)
+                
+            pipe.expire(stat_key, _CACHE_TTL_STATS)
+
+        # 2. Append Cost Accruals (Spend)
+        if event_type_enum == EventType.IMPRESSION and campaign_id is not None and cost > 0:
+            today = current_date()
+            budget_key = f"budget:{campaign_id}:{today}"
+            
+            pipe.hincrbyfloat(budget_key, "spent_today", float(cost))
+            pipe.hincrbyfloat(budget_key, "spent_total", float(cost))
+            pipe.expire(budget_key, _CACHE_TTL_BUDGET)
+            
+            if stat_key:
+                pipe.hincrbyfloat(stat_key, "spend", float(cost))
+
+        # 3. Manage Pacing Logs (Frequency Control Cap Management)
+        if event_type_enum == EventType.IMPRESSION and user_id and campaign_id is not None:
+            today = current_date()
+            daily_key = CacheKeys.freq_daily(user_id, campaign_id, today)
+            hourly_key = CacheKeys.freq_hourly(user_id, campaign_id, hour)
+            
+            pipe.incr(daily_key)
+            pipe.expire(daily_key, 86400)    # 24H TTL
+            pipe.incr(hourly_key)
+            pipe.expire(hourly_key, 3600)    # 1H TTL
+
+        await pipe.execute()
+
+    def _update_prometheus_metrics(self, campaign_id: int | None, event_type_enum: int, extra: dict[str, Any] | None) -> None:
+        """Gracefully emit telemetry tracking instances out into the independent health metric infrastructure."""
+        cid_str = str(campaign_id) if campaign_id is not None else "unknown"
+        
+        try:
+            if event_type_enum == EventType.ERROR:
+                err_code = (extra or {}).get("error_code", "unknown")
+                record_vast_error(str(err_code), cid_str)
+            elif event_type_enum == EventType.IMPRESSION:
+                record_quartile("impression", cid_str)
+            elif event_type_enum == EventType.START:
+                record_ad_start(cid_str)
+                record_quartile("start", cid_str)
+            elif event_type_enum == EventType.FIRST_QUARTILE:
+                record_quartile("firstQuartile", cid_str)
+            elif event_type_enum == EventType.MIDPOINT:
+                record_quartile("midpoint", cid_str)
+            elif event_type_enum == EventType.THIRD_QUARTILE:
+                record_quartile("thirdQuartile", cid_str)
+            elif event_type_enum == EventType.COMPLETE:
+                record_ad_completion(cid_str)
+                record_quartile("complete", cid_str)
+            elif event_type_enum == EventType.SKIP:
+                record_ad_skip(cid_str)
+        except Exception:
+            # Metrics exceptions must strictly never halt or interrup application routing
+            pass  
+
+    # ──────────────────────────────────────────────────────────────────
+    # Request Routing Trackers
+    # ──────────────────────────────────────────────────────────────────
 
     @staticmethod
     async def track_ad_request(campaign_ids: list[int] | None = None) -> None:
-        """Increment ad_requests counter in Redis.
-
-        Called once per incoming bid request. If *campaign_ids* is None the
-        counter is incremented on a global key; otherwise on each campaign
-        that was a candidate.
+        """
+        Registers incoming network bid request entries inside dashboard cache pipeline.
+        Tracks globals vs selected eligible campaigns incrementally without breaking pipeline execution.
         """
         hour = current_hour()
+        pipe = redis_client.pipeline()
+        
         if campaign_ids:
-            pipe = redis_client.pipeline()
             for cid in campaign_ids:
                 key = CacheKeys.stat_hourly(cid, hour)
                 pipe.hincrby(key, "ad_requests", 1)
-                pipe.expire(key, 48 * 3600)
-            await pipe.execute()
+                pipe.expire(key, _CACHE_TTL_STATS)
         else:
-            key = CacheKeys.stat_hourly(0, hour)  # global
-            pipe = redis_client.pipeline()
+            key = CacheKeys.stat_hourly(0, hour)
             pipe.hincrby(key, "ad_requests", 1)
-            pipe.expire(key, 48 * 3600)
-            await pipe.execute()
+            pipe.expire(key, _CACHE_TTL_STATS)
+            
+        await pipe.execute()
 
     @staticmethod
     async def track_ad_opportunity(campaign_ids: list[int]) -> None:
-        """Increment ad_opportunities for each campaign that filled.
-
-        Called after the pipeline returns candidates — each candidate
-        represents one ad opportunity.
         """
-        hour = current_hour()
+        Bumps the opportunity cache layer metrics defining candidates returned downstream.
+        Critical function representing healthy routing fill thresholds per candidate.
+        """
         if not campaign_ids:
             return
+            
+        hour = current_hour()
         pipe = redis_client.pipeline()
+        
         for cid in campaign_ids:
             key = CacheKeys.stat_hourly(cid, hour)
             pipe.hincrby(key, "ad_opportunities", 1)
-            pipe.expire(key, 48 * 3600)
+            pipe.expire(key, _CACHE_TTL_STATS)
+            
         await pipe.execute()
