@@ -2,6 +2,8 @@
 Health check endpoints.
 """
 
+import asyncio
+
 from fastapi import APIRouter
 
 from liteads.common.cache import redis_client
@@ -21,11 +23,10 @@ async def health_check() -> HealthResponse:
     """
     settings = get_settings()
 
-    # Check database
-    db_healthy = await db.health_check()
-
-    # Check Redis
-    redis_healthy = await redis_client.health_check()
+    # Check database and Redis concurrently
+    db_healthy, redis_healthy = await asyncio.gather(
+        db.health_check(), redis_client.health_check()
+    )
 
     status = "healthy" if (db_healthy and redis_healthy) else "degraded"
 
@@ -46,8 +47,9 @@ async def ping() -> dict:
 @router.get("/ready")
 async def readiness_check() -> dict:
     """Readiness check for Kubernetes."""
-    db_healthy = await db.health_check()
-    redis_healthy = await redis_client.health_check()
+    db_healthy, redis_healthy = await asyncio.gather(
+        db.health_check(), redis_client.health_check()
+    )
 
     if not db_healthy or not redis_healthy:
         return {"ready": False, "reason": "Dependencies not ready"}

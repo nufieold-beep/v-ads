@@ -35,8 +35,25 @@ from liteads.ad_server.services.demand_forwarder import DemandForwarder
 from liteads.ad_server.services.event_service import EventService
 from liteads.common.config import get_settings
 from liteads.common.database import get_session
+from liteads.common.device import (
+    detect_environment,
+    infer_ifa_type,
+    infer_os_from_ua,
+    map_placement,
+)
 from liteads.common.geoip import lookup as geoip_lookup
 from liteads.common.logger import get_logger, log_context
+from liteads.common.tracking import (
+    build_burl,
+    build_click_tracking_url,
+    build_demand_extra_params,
+    build_error_url,
+    build_impression_url,
+    build_nurl,
+    build_tracking_events,
+    empty_vast_headers,
+    empty_vast_xml,
+)
 from liteads.common.utils import generate_request_id
 from liteads.common.vast import TrackingEvent, build_vast_xml, build_vast_wrapper_xml
 from liteads.schemas.request import (
@@ -50,6 +67,17 @@ from liteads.schemas.request import (
 logger = get_logger(__name__)
 
 router = APIRouter()
+
+# ---------------------------------------------------------------------------
+# Pre-compiled regex (avoid re-compiling per request)
+# ---------------------------------------------------------------------------
+_IFA_IN_UA_RE = re.compile(r'[&;]ifa[=:]\s*([0-9a-fA-F-]{20,})')
+_IFA_BARE_RE = re.compile(r'ifa=([0-9a-fA-F-]{20,})')
+_AD_TAG_RE = re.compile(r'(<Ad[^>]*>)')
+_AD_ID_RE = re.compile(r'<Ad[^>]+id=["\']([^"\']+)["\']')
+_CREATIVE_ID_RE = re.compile(r'<Creative[^>]+id=["\']([^"\']+)["\']')
+_MEDIA_FILE_RE = re.compile(r'<MediaFile[\s>]')
+_VAST_TAG_URI_RE = re.compile(r'<VASTAdTagURI')
 
 
 # ---------------------------------------------------------------------------
@@ -67,102 +95,13 @@ def _get_demand_forwarder() -> DemandForwarder:
     return DemandForwarder()
 
 # ---------------------------------------------------------------------------
-# Helpers
+# Helpers – delegated to common.device / common.tracking
 # ---------------------------------------------------------------------------
 
-_OS_ENV_MAP: dict[str, str] = {
-    "roku": "ctv",
-    "firetv": "ctv",
-    "fireos": "ctv",
-    "tvos": "ctv",
-    "tizen": "ctv",
-    "webos": "ctv",
-    "webostv": "ctv",
-    "vizio": "ctv",
-    "androidtv": "ctv",
-    "chromecast": "ctv",
-    "playstation": "ctv",
-    "xbox": "ctv",
-    "android": "inapp",
-    "ios": "inapp",
-}
-
-
-def _detect_env(os_str: str, ua: str = "", device_type: int | None = None) -> str:
-    """Infer environment from OS string, UA, and publisher device_type."""
-    key = os_str.lower().replace(" ", "")
-
-    # 0. Publisher explicitly told us it's CTV (device_type 3=CTV, 7=STB)
-    if device_type in (3, 7):
-        return "ctv"
-
-    # 1. Explicit CTV OS identifiers (check before generic 'android')
-    _CTV_KEYWORDS = (
-        "roku", "firetv", "fireos", "tvos", "tizen", "webos",
-        "webostv", "vizio", "androidtv", "chromecast",
-        "playstation", "xbox", "googletv",
-    )
-    for kw in _CTV_KEYWORDS:
-        if kw in key:
-            return "ctv"
-
-    # 2. UA heuristics – catches GoogleTV, SmartTV, Fire TV models, etc.
-    ua_lower = (ua or "").lower()
-    if any(x in ua_lower for x in (
-        "smarttv", "smart tv", "ctv", "roku", "tizen", "webos",
-        "web0s", "firetv", "appletv", "googletv",
-        "google tv", "bravia", "philipstv", "hisense",
-        "vizio", "crkey",  # Chromecast
-        "mitv",            # Xiaomi TV (MiTV-AYFR0, etc.)
-    )):
-        return "ctv"
-
-    # 2b. Amazon Fire TV devices expose model names starting with AFT*
-    #     (AFTR, AFTB, AFTGAZL, AFTN, AFTMM, AFTS, AFTK, etc.)
-    import re as _re
-    if _re.search(r'\bAFT[A-Z0-9]', ua or ""):
-        return "ctv"
-
-    # 3. Fall back to OS map for non-CTV
-    if key in _OS_ENV_MAP:
-        return _OS_ENV_MAP[key]
-
-    return "inapp"
-
-
-def _detect_ifa_type(os_str: str, make: str = "") -> str:
-    """Infer IFA type from OS / make."""
-    key = os_str.lower().replace(" ", "")
-    if "roku" in key:
-        return "rida"
-    if "fire" in key or "amazon" in make.lower():
-        return "afai"
-    if "tvos" in key or "apple" in key:
-        return "idfa"
-    if "tizen" in key or "samsung" in make.lower():
-        return "tifa"
-    if "webos" in key or "lg" in make.lower():
-        return "lgudid"
-    if "android" in key:
-        return "gaid"
-    if "vizio" in key:
-        return "vida"
-    if "googletv" in key or "google tv" in key:
-        return "gaid"
-    if "ios" in key:
-        return "idfa"
-    return "unknown"
-
-
-def _placement_from_params(startdelay: Optional[int] = None) -> str:
-    if startdelay is not None:
-        if startdelay == 0:
-            return "pre_roll"
-        if startdelay > 0 or startdelay == -1:
-            return "mid_roll"
-        if startdelay == -2:
-            return "post_roll"
-    return "pre_roll"
+# Backward-compatible aliases for the extracted helpers
+_detect_env = detect_environment
+_detect_ifa_type = infer_ifa_type
+_placement_from_params = map_placement
 
 
 # ---------------------------------------------------------------------------
@@ -308,9 +247,9 @@ async def vast_tag(
     # Always strip it from the UA; use it as IFA only when no explicit
     # ifa param was provided.
     if ua:
-        _ifa_match = re.search(r'[&;]ifa[=:]\s*([0-9a-fA-F-]{20,})', ua)
+        _ifa_match = _IFA_IN_UA_RE.search(ua)
         if not _ifa_match:
-            _ifa_match = re.search(r'ifa=([0-9a-fA-F-]{20,})', ua)
+            _ifa_match = _IFA_BARE_RE.search(ua)
         if _ifa_match:
             if not ifa:
                 ifa = _ifa_match.group(1)
@@ -516,10 +455,10 @@ async def vast_tag(
     # Run pipeline ---------------------------------------------------------
     # Run local campaigns and demand forwarding in parallel.
     try:
-        local_task = asyncio.ensure_future(
+        local_task = asyncio.create_task(
             ad_service.serve_ads(request=ad_request, request_id=request_id)
         )
-        demand_task = asyncio.ensure_future(
+        demand_task = asyncio.create_task(
             demand_forwarder.forward(ad_request=ad_request, request_id=request_id)
         )
 
@@ -557,7 +496,7 @@ async def vast_tag(
     except Exception:
         logger.exception("VAST tag pipeline error", request_id=request_id)
         # Track the ad request even on pipeline failure (no-fill)
-        asyncio.ensure_future(EventService.track_ad_request(None))
+        asyncio.create_task(EventService.track_ad_request(None))
         return _empty_vast_response(request_id)
 
     # ── Track ad_requests & ad_opportunities in Redis ─────────────
@@ -572,7 +511,7 @@ async def vast_tag(
     tracking_ids = list(local_campaign_ids)
     if has_demand_fill or not local_campaign_ids:
         tracking_ids.append(0)  # 0 = global / demand bucket
-    asyncio.ensure_future(
+    asyncio.create_task(
         EventService.track_ad_request(tracking_ids if tracking_ids else None)
     )
 
@@ -581,7 +520,7 @@ async def vast_tag(
     if has_demand_fill:
         opp_ids.append(0)  # demand fill also counts as an opportunity
     if opp_ids:
-        asyncio.ensure_future(
+        asyncio.create_task(
             EventService.track_ad_opportunity(opp_ids)
         )
 
@@ -605,55 +544,25 @@ async def vast_tag(
     _bid_price = round(candidate.bid, 4)
 
     # URL-safe extra params for demand analytics
-    import urllib.parse as _urlparse
-    _extra_params = _urlparse.urlencode({
-        k: v for k, v in {
-            "src": _src,
-            "dom": _adomain,
-            "bnd": _bundle,
-            "cc": _country,
-            "bp": str(_bid_price),
-        }.items() if v
-    })
-    _tracking_suffix = f"&{_extra_params}" if _extra_params else ""
-
-    # Build VAST tracking events
-    tracking_events: list[TrackingEvent] = []
-    for event_name in (
-        "start", "firstQuartile", "midpoint", "thirdQuartile",
-        "complete", "mute", "unmute", "pause", "resume",
-        "skip", "fullscreen", "exitFullscreen",
-        "close", "acceptInvitation",
-    ):
-        url = (
-            f"{base_url}/api/v1/event/track?"
-            f"type={event_name}&req={request_id}&ad={ad_id}&env={env}"
-            f"{_tracking_suffix}"
-        )
-        tracking_events.append(TrackingEvent(event=event_name, url=url))
-
-    impression_url = (
-        f"{base_url}/api/v1/event/track?"
-        f"type=impression&req={request_id}&ad={ad_id}&env={env}"
-        f"{_tracking_suffix}"
+    _tracking_suffix = build_demand_extra_params(
+        source=_src, adomain=_adomain, bundle=_bundle,
+        country=_country, bid_price=_bid_price,
     )
-    error_url = (
-        f"{base_url}/api/v1/event/track?"
-        f"type=error&req={request_id}&ad={ad_id}&env={env}"
-        f"{_tracking_suffix}"
+
+    # Build VAST tracking events (shared helper)
+    tracking_events = build_tracking_events(
+        base_url, request_id, ad_id, env, _tracking_suffix,
+    )
+    impression_url = build_impression_url(
+        base_url, request_id, ad_id, env, _tracking_suffix,
+    )
+    error_url = build_error_url(
+        base_url, request_id, ad_id, env, _tracking_suffix,
     )
 
     # nurl / burl (auction price notification)
-    nurl = (
-        f"{base_url}/api/v1/event/win?"
-        f"req={request_id}&ad={ad_id}"
-        f"&price=${{AUCTION_PRICE}}&env={env}"
-    )
-    burl = (
-        f"{base_url}/api/v1/event/billing?"
-        f"req={request_id}&ad={ad_id}"
-        f"&price=${{AUCTION_PRICE}}&env={env}"
-    )
+    nurl = build_nurl(base_url, request_id, ad_id, env)
+    burl = build_burl(base_url, request_id, ad_id, env)
 
     # Determine VAST version (prefer latest supported)
     vast_version = (
@@ -684,28 +593,14 @@ async def vast_tag(
             # Rebuild tracking URLs with the real creative info
             _real_crid = _parsed["creative_id"]
             ad_id = f"ad_{candidate.campaign_id}_{_real_crid}"
-            tracking_events = []
-            for event_name in (
-                "start", "firstQuartile", "midpoint", "thirdQuartile",
-                "complete", "mute", "unmute", "pause", "resume",
-                "skip", "fullscreen", "exitFullscreen",
-                "close", "acceptInvitation",
-            ):
-                url = (
-                    f"{base_url}/api/v1/event/track?"
-                    f"type={event_name}&req={request_id}&ad={ad_id}&env={env}"
-                    f"{_tracking_suffix}"
-                )
-                tracking_events.append(TrackingEvent(event=event_name, url=url))
-            impression_url = (
-                f"{base_url}/api/v1/event/track?"
-                f"type=impression&req={request_id}&ad={ad_id}&env={env}"
-                f"{_tracking_suffix}"
+            tracking_events = build_tracking_events(
+                base_url, request_id, ad_id, env, _tracking_suffix,
             )
-            error_url = (
-                f"{base_url}/api/v1/event/track?"
-                f"type=error&req={request_id}&ad={ad_id}&env={env}"
-                f"{_tracking_suffix}"
+            impression_url = build_impression_url(
+                base_url, request_id, ad_id, env, _tracking_suffix,
+            )
+            error_url = build_error_url(
+                base_url, request_id, ad_id, env, _tracking_suffix,
             )
 
         # Inject our error pixel + tracking events into the DSP's VAST XML.
@@ -721,16 +616,15 @@ async def vast_tag(
         # Fire the demand partner's nurl (win notification) in background
         demand_nurl = candidate.metadata.get("nurl")
         if demand_nurl:
-            asyncio.ensure_future(
+            asyncio.create_task(
                 _fire_win_notice(demand_nurl, candidate.bid)
             )
     elif candidate.vast_url:
         # Wrapper – redirect player to external VAST tag.
         # No <Impression> in wrapper: the downstream VAST already has
         # its own impression pixel; including ours would double-fire.
-        click_tracking_url = (
-            f"{base_url}/api/v1/event/track?"
-            f"type=click&req={request_id}&ad={ad_id}&env={env}"
+        click_tracking_url = build_click_tracking_url(
+            base_url, request_id, ad_id, env,
         )
         vast_xml = build_vast_wrapper_xml(
             version=vast_version,
@@ -855,7 +749,7 @@ def _inject_tracking_into_adm(
             return adm.replace(tag, f"{tag}{inject_block}", 1)
 
     # Fallback: insert after <Ad ...> tag
-    ad_match = re.search(r"(<Ad[^>]*>)", adm)
+    ad_match = _AD_TAG_RE.search(adm)
     if ad_match:
         pos = ad_match.end()
         return adm[:pos] + inject_block + adm[pos:]
@@ -877,19 +771,19 @@ def _parse_adm_vast(adm: str) -> dict:
     result = {"ad_id": None, "creative_id": None, "has_media": False}
 
     # Extract <Ad id="...">
-    ad_match = re.search(r'<Ad[^>]+id=["\']([^"\']+)["\']', adm)
+    ad_match = _AD_ID_RE.search(adm)
     if ad_match:
         result["ad_id"] = ad_match.group(1)
 
     # Extract <Creative id="..."> (first one found)
-    crid_match = re.search(r'<Creative[^>]+id=["\']([^"\']+)["\']', adm)
+    crid_match = _CREATIVE_ID_RE.search(adm)
     if crid_match:
         result["creative_id"] = crid_match.group(1)
 
     # Check for <MediaFile> presence (any tag containing media content)
     result["has_media"] = bool(
-        re.search(r'<MediaFile[\s>]', adm)
-        or re.search(r'<VASTAdTagURI', adm)  # Wrapper pointing to media
+        _MEDIA_FILE_RE.search(adm)
+        or _VAST_TAG_URI_RE.search(adm)  # Wrapper pointing to media
     )
 
     return result
@@ -912,27 +806,8 @@ async def _fire_win_notice(nurl: str, price: float) -> None:
 
 
 def _infer_os_from_ua(ua: str) -> str:
-    """Try to infer OS from User-Agent string."""
-    ua_lower = ua.lower()
-    if "roku" in ua_lower:
-        return "Roku"
-    if "web0s" in ua_lower or "webos" in ua_lower:
-        return "webOS TV"
-    if "tizen" in ua_lower:
-        return "Tizen"
-    if "firetv" in ua_lower or "aftb" in ua_lower:
-        return "Fire OS"
-    if "appletv" in ua_lower or "apple tv" in ua_lower:
-        return "tvOS"
-    if "crkey" in ua_lower:
-        return "Chromecast"
-    if "smarttv" in ua_lower:
-        return "Smart TV"
-    if "android" in ua_lower:
-        return "Android"
-    if "iphone" in ua_lower or "ipad" in ua_lower:
-        return "iOS"
-    return ""
+    """Try to infer OS from User-Agent string (delegated to common.device)."""
+    return infer_os_from_ua(ua)
 
 
 def _resolve_base_url(request: Request, settings: Any) -> str:
@@ -973,22 +848,16 @@ def _empty_vast_response(request_id: str = "") -> Response:
 
     Per VAST spec, return HTTP 200 with an empty VAST element — not 204.
     This is critical for SSP/exchange compatibility (Magnite, Xandr, etc.).
+    Delegates to ``common.tracking`` for the shared XML / headers.
     """
-    empty_vast = (
-        '<?xml version="1.0" encoding="UTF-8"?>\n'
-        '<VAST version="4.0"/>'
-    )
+    headers = empty_vast_headers(request_id)
+    headers["Pragma"] = "no-cache"
+    headers["Access-Control-Allow-Origin"] = "*"
     return Response(
-        content=empty_vast,
+        content=empty_vast_xml(),
         media_type="application/xml",
         status_code=200,
-        headers={
-            "Content-Type": "application/xml; charset=utf-8",
-            "X-Request-ID": request_id,
-            "Cache-Control": "no-store, no-cache, must-revalidate, max-age=0",
-            "Pragma": "no-cache",
-            "Access-Control-Allow-Origin": "*",
-        },
+        headers=headers,
     )
 
 

@@ -12,6 +12,12 @@ from liteads.ad_server.services.ad_service import AdService
 from liteads.common.config import get_settings
 from liteads.common.database import get_session
 from liteads.common.logger import get_logger, log_context
+from liteads.common.tracking import (
+    build_burl,
+    build_nurl,
+    empty_vast_headers,
+    empty_vast_xml,
+)
 from liteads.common.utils import generate_request_id
 from liteads.schemas.request import AdRequest
 from liteads.schemas.response import (
@@ -38,12 +44,14 @@ def _build_tracking_urls(
 ) -> VideoTrackingUrls:
     """Build VAST-standard video tracking URLs.
 
-    Compatible with VAST 2.0 through 4.x event tracking.
+    Delegates to ``common.tracking`` for the URL template so the pattern
+    lives in one place.
     """
+    from liteads.common.tracking import build_tracking_event_url
+
     def _url(event_type: str) -> str:
-        return (
-            f"{base_url}/api/v1/event/track"
-            f"?type={event_type}&req={request_id}&ad={ad_id}&env={environment}"
+        return build_tracking_event_url(
+            base_url, event_type, request_id, ad_id, environment,
         )
 
     return VideoTrackingUrls(
@@ -151,11 +159,8 @@ async def request_ads(
 
         # Auction price = CPM bid (nurl/burl compatible)
         # The ${AUCTION_PRICE} macro is replaced with actual clearing price
-        nurl = (
-            f"{base_url}/api/v1/event/win"
-            f"?req={request_id}&ad={ad_id}"
-            f"&price=${{AUCTION_PRICE}}&env={ad_request.environment}"
-        )
+        nurl = build_nurl(base_url, request_id, ad_id, ad_request.environment)
+        burl = build_burl(base_url, request_id, ad_id, ad_request.environment)
 
         ad = AdResponse(
             ad_id=ad_id,
@@ -170,7 +175,7 @@ async def request_ads(
                 "pvtr": round(candidate.pvtr, 6),
                 "pctr": round(candidate.pctr, 6),
                 "nurl": nurl,
-                "burl": f"{base_url}/api/v1/event/billing?req={request_id}&ad={ad_id}&price=${{AUCTION_PRICE}}",
+                "burl": burl,
             }
             if settings.debug
             else {
@@ -218,17 +223,9 @@ async def get_vast_xml(
         ad_id=ad_id,
     )
 
-    empty_vast = (
-        '<?xml version="1.0" encoding="UTF-8"?>\n'
-        '<VAST version="4.0"/>'
-    )
     return Response(
-        content=empty_vast,
+        content=empty_vast_xml(),
         media_type="application/xml",
         status_code=200,
-        headers={
-            "Content-Type": "application/xml; charset=utf-8",
-            "X-Request-ID": request_id,
-            "Cache-Control": "no-store, no-cache, must-revalidate, max-age=0",
-        },
+        headers=empty_vast_headers(request_id),
     )

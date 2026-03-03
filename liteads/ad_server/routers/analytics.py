@@ -17,7 +17,6 @@ Endpoints:
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -27,7 +26,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from liteads.ad_server.services.analytics_service import AnalyticsService
 from liteads.common.database import get_session
 from liteads.common.logger import get_logger
-from liteads.common.utils import safe_divide
+from liteads.common.utils import parse_optional_iso_datetime, safe_divide
 from liteads.models import AdEvent, EventType
 
 logger = get_logger(__name__)
@@ -153,12 +152,8 @@ async def campaign_historical(
     end: str | None = Query(None, description="End datetime ISO-8601"),
     service: AnalyticsService = Depends(_get_analytics_service),
 ) -> dict[str, Any]:
-    start_dt = (
-        datetime.fromisoformat(start).replace(tzinfo=timezone.utc) if start else None
-    )
-    end_dt = (
-        datetime.fromisoformat(end).replace(tzinfo=timezone.utc) if end else None
-    )
+    start_dt = parse_optional_iso_datetime(start)
+    end_dt = parse_optional_iso_datetime(end)
     rows = await service.get_campaign_historical_stats(campaign_id, start_dt, end_dt)
     return {"campaign_id": campaign_id, "hours": rows, "count": len(rows)}
 
@@ -183,12 +178,8 @@ async def demand_report(
     campaign_id: int | None = Query(None, description="Filter by campaign"),
     service: AnalyticsService = Depends(_get_analytics_service),
 ) -> list[dict[str, Any]]:
-    start_dt = (
-        datetime.fromisoformat(start).replace(tzinfo=timezone.utc) if start else None
-    )
-    end_dt = (
-        datetime.fromisoformat(end).replace(tzinfo=timezone.utc) if end else None
-    )
+    start_dt = parse_optional_iso_datetime(start)
+    end_dt = parse_optional_iso_datetime(end)
     return await service.get_demand_report(start_dt, end_dt, campaign_id)
 
 
@@ -209,12 +200,8 @@ async def supply_report(
     campaign_id: int | None = Query(None, description="Filter by campaign"),
     service: AnalyticsService = Depends(_get_analytics_service),
 ) -> list[dict[str, Any]]:
-    start_dt = (
-        datetime.fromisoformat(start).replace(tzinfo=timezone.utc) if start else None
-    )
-    end_dt = (
-        datetime.fromisoformat(end).replace(tzinfo=timezone.utc) if end else None
-    )
+    start_dt = parse_optional_iso_datetime(start)
+    end_dt = parse_optional_iso_datetime(end)
     return await service.get_supply_report(start_dt, end_dt, campaign_id)
 
 
@@ -237,12 +224,8 @@ async def delivery_health_report(
     campaign_id: int | None = Query(None, description="Filter by campaign"),
     service: AnalyticsService = Depends(_get_analytics_service),
 ) -> dict[str, Any]:
-    start_dt = (
-        datetime.fromisoformat(start).replace(tzinfo=timezone.utc) if start else None
-    )
-    end_dt = (
-        datetime.fromisoformat(end).replace(tzinfo=timezone.utc) if end else None
-    )
+    start_dt = parse_optional_iso_datetime(start)
+    end_dt = parse_optional_iso_datetime(end)
     return await service.get_delivery_health_report(start_dt, end_dt, campaign_id)
 
 
@@ -263,12 +246,8 @@ async def vast_errors_report(
 ) -> dict[str, Any]:
     from sqlalchemy import func, select
 
-    start_dt = (
-        datetime.fromisoformat(start).replace(tzinfo=timezone.utc) if start else None
-    )
-    end_dt = (
-        datetime.fromisoformat(end).replace(tzinfo=timezone.utc) if end else None
-    )
+    start_dt = parse_optional_iso_datetime(start)
+    end_dt = parse_optional_iso_datetime(end)
 
     filters: list[Any] = [AdEvent.event_type == EventType.ERROR]
     if start_dt:

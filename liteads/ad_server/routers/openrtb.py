@@ -25,6 +25,7 @@ from liteads.ad_server.middleware.metrics import record_no_bid
 from liteads.common.database import get_session
 from liteads.common.logger import get_logger
 from liteads.common.ortb_enricher import enrich_bid_request
+from liteads.common.utils import extract_client_ip
 from liteads.schemas.openrtb import BidRequest, BidResponse, NoBidReason
 
 logger = get_logger(__name__)
@@ -107,9 +108,7 @@ async def openrtb_bid(
     start_time = time.monotonic()
 
     # ---- Log & enrich from HTTP headers ----
-    client_ip = (
-        x_forwarded_for.split(",")[0].strip() if x_forwarded_for else None
-    ) or (request.client.host if request.client else None)
+    client_ip = extract_client_ip(x_forwarded_for, request.client.host if request.client else None)
 
     logger.info(
         "OpenRTB bid request received",

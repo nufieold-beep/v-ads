@@ -6,10 +6,19 @@
   "type": "object",
   "required": ["id", "imp"],
   "properties": {
-    "id":   { "type": "string",  "description": "Unique auction ID (auto-generated UUID if absent)" },
-    "at":   { "type": "integer", "default": 1, "description": "Auction type: 1=first-price, 2=second-price" },
-    "tmax": { "type": "integer", "default": 500, "description": "Max response time (ms)" },
-    "cur":  { "type": "array",   "items": { "type": "string" }, "default": ["USD"] },
+    "id":       { "type": "string",  "description": "Unique auction ID (auto-generated UUID if absent)" },
+    "at":       { "type": "integer", "default": 1, "description": "Auction type: 1=first-price, 2=second-price" },
+    "tmax":     { "type": "integer", "default": 500, "description": "Max response time (ms)" },
+    "cur":      { "type": "array",   "items": { "type": "string" }, "default": ["USD"] },
+    "allimps":  { "type": "integer", "description": "1 = exchange can verify all impressions" },
+    "wseat":    { "type": "array",   "items": { "type": "string" }, "description": "Allowed buyer seats" },
+    "bseat":    { "type": "array",   "items": { "type": "string" }, "description": "Blocked buyer seats" },
+    "wlang":    { "type": "array",   "items": { "type": "string" }, "description": "Allowed languages (ISO-639-1)" },
+    "wlangb":   { "type": "array",   "items": { "type": "string" }, "description": "Allowed languages (BCP-47, OpenRTB 2.6)" },
+    "bcat":     { "type": "array",   "items": { "type": "string" }, "description": "Blocked IAB categories" },
+    "cattax":   { "type": "integer", "description": "Category taxonomy version (1=IAB 1.0, 2=IAB 2.0, etc.)" },
+    "badv":     { "type": "array",   "items": { "type": "string" }, "description": "Blocked advertiser domains" },
+    "bapp":     { "type": "array",   "items": { "type": "string" }, "description": "Blocked app bundles" },
 
     "imp": {
       "type": "array",
@@ -18,29 +27,99 @@
         "type": "object",
         "required": ["id"],
         "properties": {
-          "id":           { "type": "string",  "default": "1" },
-          "tagid":        { "type": "string",  "default": "SELLER_PLACEMENT_ID", "description": "Filled from supply-tag slot_id" },
-          "bidfloor":     { "type": "number",  "default": 5.0 },
-          "bidfloorcur":  { "type": "string",  "default": "USD" },
+          "id":                 { "type": "string",  "default": "1" },
+          "tagid":              { "type": "string",  "description": "Filled from supply-tag slot_id" },
+          "bidfloor":           { "type": "number",  "default": 5.0 },
+          "bidfloorcur":        { "type": "string",  "default": "USD" },
+          "secure":             { "type": "integer", "default": 1, "description": "0=HTTP, 1=HTTPS (always 1 for video)" },
+          "instl":              { "type": "integer", "description": "1=full-screen/interstitial (auto-set to 1 for CTV)" },
+          "exp":                { "type": "integer", "description": "Impression expiry (seconds after auction close)" },
+          "rwdd":               { "type": "integer", "description": "1=rewarded video (OpenRTB 2.6)" },
+          "displaymanager":     { "type": "string",  "description": "Name of ad mediation partner / SDK" },
+          "displaymanagerver":  { "type": "string",  "description": "Version of ad mediation partner / SDK" },
+          "metric":             { "type": "array",   "items": { "type": "object" }, "description": "Impression-level metrics" },
           "video": {
             "type": "object",
             "properties": {
               "mimes":          { "type": "array",   "items": { "type": "string" },  "default": ["video/mp4"] },
-              "protocols":      { "type": "array",   "items": { "type": "integer" }, "default": [2,3,5,6,7,8] },
+              "protocols":      { "type": "array",   "items": { "type": "integer" }, "default": [2,3,5,6,7,8], "description": "VAST versions: 2=2.0, 3=3.0, 4=2.0-Wrapper, 5=3.0-Wrapper, 6=4.0, 7=4.1, 8=4.2" },
               "w":              { "type": "integer", "default": 1920 },
               "h":              { "type": "integer", "default": 1080 },
-              "plcmt":          { "type": "integer", "default": 1, "description": "1=In-Stream" },
-              "placement":      { "type": "integer", "default": 1, "description": "1=In-Stream" },
-              "linearity":      { "type": "integer", "default": 1, "description": "1=Linear (in-stream)" },
-              "startdelay":     { "type": "integer", "default": 0, "description": "0=pre-roll" },
+              "plcmt":          { "type": "integer", "default": 1, "description": "1=In-Stream (§5.9.1 OpenRTB 2.6)" },
+              "placement":      { "type": "integer", "default": 1, "description": "1=In-Stream (§5.9)" },
+              "linearity":      { "type": "integer", "default": 1, "description": "1=Linear (in-stream), 2=Non-linear" },
+              "startdelay":     { "type": "integer", "default": 0, "description": "0=pre-roll, >0=mid-roll offset, -1=generic mid, -2=post" },
               "minduration":    { "type": "integer", "default": 3 },
               "maxduration":    { "type": "integer", "default": 30 },
-              "playbackmethod": { "type": "array",   "items": { "type": "integer" }, "default": [1,3,4,5] },
-              "delivery":       { "type": "array",   "items": { "type": "integer" }, "default": [2] },
-              "skip":           { "type": "integer", "default": 0, "description": "0=not-skippable" }
+              "playbackmethod": { "type": "array",   "items": { "type": "integer" }, "default": [1,3,4,5], "description": "§5.10: 1=page-load-sound-on, 2=click, 3=mouse-over, 4=auto-play-viewport, 5=auto-play-viewport-sound-on" },
+              "delivery":       { "type": "array",   "items": { "type": "integer" }, "default": [2], "description": "§5.15: 1=streaming, 2=progressive, 3=download" },
+              "skip":           { "type": "integer", "default": 0, "description": "0=not-skippable, 1=skippable" },
+              "skipmin":        { "type": "integer", "description": "Min seconds before skip is available" },
+              "skipafter":      { "type": "integer", "description": "Seconds until skip button appears" },
+              "sequence":       { "type": "integer", "description": "Sequence number for multi-ad in pod" },
+              "battr":          { "type": "array",   "items": { "type": "integer" }, "description": "Blocked creative attributes (§5.3)" },
+              "minbitrate":     { "type": "integer", "description": "Minimum bitrate (kbps)" },
+              "maxbitrate":     { "type": "integer", "description": "Maximum bitrate (kbps)" },
+              "boxingallowed":  { "type": "integer", "default": 1, "description": "1=allow letter/pillar-boxing" },
+              "maxextended":    { "type": "integer", "description": "Max extended ad duration (seconds)" },
+              "playbackend":    { "type": "integer", "description": "§5.11: 1=video-completion, 2=leaving-viewport, 3=floating" },
+              "api":            { "type": "array",   "items": { "type": "integer" }, "description": "§5.6: 7=OMID-1 (in-app); CTV sends empty []" },
+              "poddur":         { "type": "integer", "description": "Total pod duration (seconds) – OpenRTB 2.6 ad pod" },
+              "maxseq":         { "type": "integer", "description": "Max ads in the pod" },
+              "podid":          { "type": "string",  "description": "Pod identifier" },
+              "podseq":         { "type": "integer", "description": "Pod position: 0=any, 1=first, -1=last" },
+              "poddedupe":      { "type": "array",   "items": { "type": "integer" }, "description": "Dedup signals: 1=same creative, 2=IAB cat, 3=adomain" },
+              "companionad":    { "type": "array",   "items": { "type": "object" }, "description": "Companion banner specs" },
+              "companiontype":  { "type": "array",   "items": { "type": "integer" }, "description": "Supported companion types" },
+              "ext":            { "type": "object",  "description": "Video extension object" }
             }
-          }
+          },
+          "pmp": {
+            "type": "object",
+            "description": "Private marketplace container (§3.2.11)",
+            "properties": {
+              "private_auction": { "type": "integer", "description": "1=deals-only auction" },
+              "deals": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "required": ["id"],
+                  "properties": {
+                    "id":           { "type": "string",  "description": "Unique deal ID" },
+                    "bidfloor":     { "type": "number",  "default": 0 },
+                    "bidfloorcur":  { "type": "string",  "default": "USD" },
+                    "at":           { "type": "integer", "description": "Auction type override for deal" },
+                    "wseat":        { "type": "array",   "items": { "type": "string" } },
+                    "wadomain":     { "type": "array",   "items": { "type": "string" } }
+                  }
+                }
+              }
+            }
+          },
+          "ext":  { "type": "object", "description": "Impression extension object" }
         }
+      }
+    },
+
+    "site": {
+      "type": "object",
+      "description": "Site object – used when CTV inventory is web-based (Samsung TV Plus, LG Channels via browser)",
+      "properties": {
+        "id":      { "type": "string" },
+        "name":    { "type": "string" },
+        "domain":  { "type": "string" },
+        "page":    { "type": "string" },
+        "ref":     { "type": "string", "description": "Referrer URL" },
+        "cat":     { "type": "array",  "items": { "type": "string" } },
+        "mobile":  { "type": "integer", "description": "1=mobile-optimized" },
+        "publisher": {
+          "type": "object",
+          "properties": {
+            "id":   { "type": "string" },
+            "name": { "type": "string" }
+          }
+        },
+        "content": { "$ref": "#/$defs/content" }
       }
     },
 
@@ -50,56 +129,134 @@
         "id":      { "type": "string", "default": "APP_ID" },
         "name":    { "type": "string", "default": "APP_NAME" },
         "bundle":  { "type": "string", "default": "com.example.ctv" },
+        "domain":  { "type": "string", "description": "App domain (e.g. verylocal.com)" },
+        "storeurl": { "type": "string", "description": "App store URL" },
+        "ver":     { "type": "string", "description": "App version" },
+        "cat":     { "type": "array",  "items": { "type": "string" }, "description": "IAB content categories" },
+        "sectioncat": { "type": "array", "items": { "type": "string" } },
+        "pagecat":    { "type": "array", "items": { "type": "string" } },
+        "privacypolicy": { "type": "integer", "description": "1=app has privacy policy" },
+        "paid":    { "type": "integer", "description": "1=paid app" },
+        "inventorypartnerdomain": { "type": "string", "description": "Inventory partner domain (OpenRTB 2.6)" },
         "publisher": {
           "type": "object",
           "properties": {
-            "id":   { "type": "string", "default": "PUB_ID" },
-            "name": { "type": "string", "default": "PUBLISHER" }
+            "id":     { "type": "string", "default": "PUB_ID" },
+            "name":   { "type": "string", "default": "PUBLISHER" },
+            "domain": { "type": "string" },
+            "cat":    { "type": "array",  "items": { "type": "string" } }
           }
         },
-        "content": {
-          "type": "object",
-          "properties": {
-            "id":         { "type": "string"  },
-            "title":      { "type": "string"  },
-            "series":     { "type": "string"  },
-            "season":     { "type": "string"  },
-            "episode":    { "type": "integer" },
-            "len":        { "type": "integer", "default": 1800 },
-            "livestream": { "type": "integer", "default": 0 },
-            "language":   { "type": "string",  "default": "en" },
-            "cat":        { "type": "array",   "items": { "type": "string" }, "default": ["IAB1-6"] }
-          }
-        }
+        "content": { "$ref": "#/$defs/content" },
+        "ext":     { "type": "object" }
       }
     },
 
     "device": {
       "type": "object",
       "properties": {
-        "devicetype": { "type": "integer", "default": 3, "description": "3=CTV, 7=STB, 1=Mobile" },
-        "ua":         { "type": "string",  "description": "User-Agent (auto-filled from HTTP header)" },
-        "ip":         { "type": "string",  "description": "User IP (auto-filled from X-Forwarded-For)" },
-        "make":       { "type": "string",  "default": "Samsung" },
-        "model":      { "type": "string",  "default": "SmartTV" },
-        "os":         { "type": "string",  "default": "Tizen" },
-        "osv":        { "type": "string",  "default": "7.0" },
-        "ifa":        { "type": "string",  "description": "IFA (RIDA/AFAI/IDFA/TIFA/GAID/LGUDID)" },
-        "lmt":        { "type": "integer", "default": 0 },
-        "dnt":        { "type": "integer", "default": 0 },
-        "language":   { "type": "string",  "default": "en" }
+        "devicetype":     { "type": "integer", "default": 3, "description": "§5.21: 3=CTV, 7=STB, 1=Mobile/Tablet, 4=Phone, 5=Tablet" },
+        "ua":             { "type": "string",  "description": "User-Agent (auto-filled from HTTP header)" },
+        "ip":             { "type": "string",  "description": "IPv4 (auto-filled from X-Forwarded-For)" },
+        "ipv6":           { "type": "string",  "description": "IPv6 (many CTV devices are IPv6-only)" },
+        "geo": {
+          "type": "object",
+          "description": "Auto-enriched from MaxMind if omitted",
+          "properties": {
+            "lat":       { "type": "number" },
+            "lon":       { "type": "number" },
+            "type":      { "type": "integer", "description": "1=GPS, 2=IP, 3=User" },
+            "accuracy":  { "type": "integer", "description": "Accuracy radius (meters)" },
+            "ipservice": { "type": "integer", "description": "1=ip2location, 2=Neustar, 3=MaxMind, 4=NetAcuity" },
+            "country":   { "type": "string",  "description": "ISO-3166-1 Alpha-3" },
+            "region":    { "type": "string" },
+            "metro":     { "type": "string",  "description": "Nielsen DMA code" },
+            "city":      { "type": "string" },
+            "zip":       { "type": "string" },
+            "utcoffset": { "type": "integer" }
+          }
+        },
+        "make":           { "type": "string",  "default": "Samsung", "description": "e.g. ROKU, LG, Amazon, Samsung, Apple" },
+        "model":          { "type": "string",  "default": "SmartTV", "description": "e.g. DIGITAL VIDEO PLAYER, 50UN6950ZUF" },
+        "os":             { "type": "string",  "default": "Tizen", "description": "Roku, Fire OS, tvOS, Tizen, webOS, Android, iOS" },
+        "osv":            { "type": "string",  "default": "7.0", "description": "OS version" },
+        "hwv":            { "type": "string",  "description": "Hardware version" },
+        "w":              { "type": "integer", "description": "Screen width in pixels" },
+        "h":              { "type": "integer", "description": "Screen height in pixels" },
+        "ppi":            { "type": "integer", "description": "Screen DPI" },
+        "pxratio":        { "type": "number",  "description": "Pixel ratio" },
+        "ifa":            { "type": "string",  "description": "IFA (RIDA/AFAI/IDFA/TIFA/GAID/LGUDID/VIDA)" },
+        "lmt":            { "type": "integer", "default": 0, "description": "Limit Ad Tracking (0 or 1)" },
+        "dnt":            { "type": "integer", "default": 0, "description": "Do Not Track (0 or 1)" },
+        "language":       { "type": "string",  "default": "en", "description": "ISO-639-1" },
+        "carrier":        { "type": "string",  "description": "Carrier / ISP name" },
+        "connectiontype": { "type": "integer", "default": 1, "description": "§5.22: 1=Ethernet (CTV default), 2=WiFi, 3=Cellular, 6=4G, 7=5G" },
+        "didsha1":        { "type": "string",  "description": "Hardware device ID SHA1" },
+        "didmd5":         { "type": "string",  "description": "Hardware device ID MD5" },
+        "js":             { "type": "integer", "description": "0=no JS support (CTV)" },
+        "sua":            {
+          "type": "object",
+          "description": "Structured User Agent (§3.2.29) – parsed device signals without UA regex",
+          "properties": {
+            "browsers": { "type": "array", "items": { "type": "object" } },
+            "platform": { "type": "object", "properties": { "brand": { "type": "string" } } },
+            "mobile":   { "type": "integer", "description": "0=CTV/desktop, 1=mobile" },
+            "source":   { "type": "integer", "description": "3=derived from UA" }
+          }
+        },
+        "ext": {
+          "type": "object",
+          "description": "IAB CTV IFA Guidelines – ifa_type MUST be here for DSPs",
+          "properties": {
+            "ifa_type": { "type": "string", "description": "rida/afai/idfa/tifa/lgudid/vida/gaid" },
+            "is_ctv":   { "type": "integer", "description": "1=CTV device" }
+          }
+        }
       }
     },
 
     "user": {
       "type": "object",
       "properties": {
-        "id": { "type": "string" },
+        "id":     { "type": "string", "description": "Deterministic hash from IFA or IP+UA" },
+        "buyeruid": { "type": "string" },
+        "eids": {
+          "type": "array",
+          "description": "Extended IDs per IAB §3.2.27 (UID2, LiveRamp, platform IFAs)",
+          "items": {
+            "type": "object",
+            "properties": {
+              "source": { "type": "string", "description": "e.g. roku.com, amazon.com, apple.com, samsung.com" },
+              "uids": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "id":    { "type": "string" },
+                    "atype": { "type": "integer", "description": "3=device/hardware ID" }
+                  }
+                }
+              }
+            }
+          },
+          "default": []
+        },
+        "data": {
+          "type": "array",
+          "description": "Audience segment data (§3.2.21)",
+          "items": {
+            "type": "object",
+            "properties": {
+              "id":   { "type": "string" },
+              "name": { "type": "string" },
+              "segment": { "type": "array", "items": { "type": "object" } }
+            }
+          }
+        },
         "ext": {
           "type": "object",
           "properties": {
-            "consent": { "type": "string", "description": "TCF or other consent string" },
-            "eids":    { "type": "array",  "items": { "type": "object" }, "default": [] }
+            "consent": { "type": "string", "description": "TCF or other consent string" }
           }
         }
       }
@@ -108,12 +265,16 @@
     "regs": {
       "type": "object",
       "properties": {
-        "coppa": { "type": "integer", "default": 0 },
+        "coppa":      { "type": "integer", "default": 0 },
+        "gdpr":       { "type": "integer", "default": 0 },
+        "us_privacy": { "type": "string",  "default": "1---", "description": "IAB US Privacy/CCPA string" },
+        "gpp":        { "type": "string",  "description": "IAB Global Privacy Platform string" },
+        "gpp_sid":    { "type": "array",   "items": { "type": "integer" }, "description": "Applicable GPP section IDs" },
         "ext": {
           "type": "object",
           "properties": {
-            "gdpr":       { "type": "integer", "default": 0 },
-            "us_privacy": { "type": "string",  "default": "1---" }
+            "gdpr":       { "type": "integer", "description": "Legacy GDPR flag location" },
+            "us_privacy": { "type": "string",  "description": "Legacy US Privacy location" }
           }
         }
       }
@@ -122,6 +283,9 @@
     "source": {
       "type": "object",
       "properties": {
+        "fd":     { "type": "integer", "default": 1, "description": "1=exchange responsible for final sale" },
+        "tid":    { "type": "string",  "description": "Transaction ID (unique per auction)" },
+        "pchain": { "type": "string",  "description": "TAG Payment ID chain" },
         "ext": {
           "type": "object",
           "properties": {
@@ -137,7 +301,10 @@
                     "properties": {
                       "asi":    { "type": "string",  "default": "viadsmedia.com" },
                       "sid":    { "type": "string",  "default": "778008" },
-                      "hp":     { "type": "integer", "default": 1 }
+                      "hp":     { "type": "integer", "default": 1 },
+                      "rid":    { "type": "string" },
+                      "name":   { "type": "string" },
+                      "domain": { "type": "string" }
                     },
                     "required": ["asi", "sid", "hp"]
                   },
@@ -147,6 +314,39 @@
             }
           }
         }
+      }
+    }
+  },
+
+  "$defs": {
+    "content": {
+      "type": "object",
+      "description": "Content object (§3.2.16) – critical for CTV brand-safety & contextual targeting",
+      "properties": {
+        "id":                { "type": "string" },
+        "title":             { "type": "string" },
+        "series":            { "type": "string" },
+        "season":            { "type": "string" },
+        "episode":           { "type": "integer" },
+        "genre":             { "type": "string" },
+        "gtax":              { "type": "integer", "description": "Genre taxonomy (§5.26, e.g. 9=eGenre)" },
+        "genres":            { "type": "array",   "items": { "type": "string" }, "description": "Genre codes from taxonomy" },
+        "url":               { "type": "string" },
+        "cat":               { "type": "array",   "items": { "type": "string" }, "default": ["IAB1-6"] },
+        "cattax":            { "type": "integer", "description": "Category taxonomy version" },
+        "prodq":             { "type": "integer", "description": "Production quality" },
+        "context":           { "type": "integer", "description": "1=video, 2=game, 3=music, 4=app" },
+        "contentrating":     { "type": "string" },
+        "qagmediarating":    { "type": "integer" },
+        "language":          { "type": "string",  "default": "en" },
+        "len":               { "type": "integer", "default": 1800, "description": "Content length (seconds)" },
+        "livestream":        { "type": "integer", "default": 0 },
+        "keywords":          { "type": "string" },
+        "network":           { "type": "object",  "properties": { "name": { "type": "string" } }, "description": "Content network" },
+        "channel":           { "type": "object",  "properties": { "name": { "type": "string" } }, "description": "Content channel" },
+        "producer":          { "type": "object",  "properties": { "name": { "type": "string" } } },
+        "data":              { "type": "array",   "items": { "type": "object" } },
+        "ext":               { "type": "object" }
       }
     }
   }

@@ -103,7 +103,11 @@ def enrich_bid_request(
     if _set_default(br, "tmax", 500):
         enriched_fields.append("tmax")
 
-    # ── 2. Impression + Video ─────────────────────────────────────────
+    # ── 2. Impression + Video ───────────────────────────────────
+    # Detect CTV early so we can set instl correctly
+    _is_ctv = False
+    if br.device and br.device.devicetype in (3, 7):
+        _is_ctv = True
     for imp in br.imp:
         if not imp.id:
             imp.id = "1"
@@ -115,6 +119,16 @@ def enrich_bid_request(
         if imp.bidfloor is None:
             imp.bidfloor = 0.01  # minimal floor — let DSP decide
             enriched_fields.append("imp.bidfloor")
+
+        # secure (HTTPS) — always 1 for video
+        if imp.secure is None:
+            imp.secure = 1
+            enriched_fields.append("imp.secure")
+
+        # instl (full-screen) — CTV is always full-screen, in-app depends
+        if imp.instl is None and _is_ctv:
+            imp.instl = 1
+            enriched_fields.append("imp.instl")
 
         # -- Video --
         if imp.video is None:
@@ -153,6 +167,12 @@ def enrich_bid_request(
         if not dev.ua and user_agent:
             dev.ua = user_agent
             enriched_fields.append("device.ua")
+
+        # connectiontype: CTV → Ethernet (1), others → WiFi (2)
+        if dev.connectiontype is None:
+            env = "ctv" if dev.devicetype in (3, 7) else "inapp"
+            dev.connectiontype = 1 if env == "ctv" else 2
+            enriched_fields.append("device.connectiontype")
 
     # ── 4. Geo auto-enrichment from MaxMind ───────────────────────────
     _enrich_geo(br, enriched_fields)

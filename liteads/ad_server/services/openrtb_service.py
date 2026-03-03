@@ -13,7 +13,22 @@ from typing import Optional
 from liteads.ad_server.services.ad_service import AdService
 from liteads.ad_server.services.pod_service import PodBuilder, PodConfig
 from liteads.common.config import get_settings
+from liteads.common.device import (
+    infer_ifa_type,
+    map_connection_type,
+    map_device_type,
+    map_placement,
+)
 from liteads.common.logger import get_logger
+from liteads.common.tracking import (
+    build_burl,
+    build_click_tracking_url,
+    build_error_url,
+    build_impression_url,
+    build_lurl,
+    build_nurl,
+    build_tracking_events,
+)
 from liteads.common.vast import TrackingEvent, build_vast_xml, build_vast_wrapper_xml
 from liteads.rec_engine.ranking.bidding import SecondPriceAuction
 from liteads.schemas.openrtb import (
@@ -262,10 +277,10 @@ class OpenRTBService:
         device: Optional[DeviceInfo] = None
         if br.device:
             # Prefer ext.ifa_type if available (e.g. Roku sends {"ifa_type":"rida"})
-            ifa_type = br.device.ifa_type or self._infer_ifa_type(br.device.os)
+            ifa_type = br.device.ifa_type or infer_ifa_type(br.device.os)
 
             device = DeviceInfo(
-                device_type=self._map_device_type(br.device.devicetype),
+                device_type=map_device_type(br.device.devicetype),
                 os=(br.device.os or "").lower().replace(" ", ""),
                 os_version=br.device.osv or "",
                 make=(br.device.make or "").strip(),
@@ -277,29 +292,46 @@ class OpenRTBService:
                 ip=br.device.ip,
                 ua=br.device.ua,
                 language=br.device.language,
-                connection_type=self._map_connection_type(br.device.connectiontype),
+                connection_type=map_connection_type(br.device.connectiontype),
                 screen_width=br.device.w,
                 screen_height=br.device.h,
             )
 
-        # App
+        # App – forward all content metadata for contextual targeting
         app: Optional[AppInfo] = None
         if br.app:
-            genre = ""
-            rating = ""
-            content_id = ""
-            if br.app.content:
-                genre = br.app.content.genre or ""
-                rating = br.app.content.contentrating or ""
-                content_id = br.app.content.id or ""
+            c = br.app.content
             app = AppInfo(
                 app_id=br.app.id or "",
                 app_name=br.app.name or "",
                 app_bundle=br.app.bundle or "",
                 store_url=br.app.storeurl or "",
-                content_genre=genre,
-                content_rating=rating,
-                content_id=content_id,
+                app_domain=br.app.domain or "",
+                app_category=",".join(br.app.cat) if br.app.cat else "",
+                publisher_id=br.app.publisher.id if br.app.publisher else "",
+                inventory_partner_domain=br.app.inventorypartnerdomain or "",
+                page_categories=",".join(br.app.pagecat) if br.app.pagecat else "",
+                # Content metadata (critical for CTV brand-safety & contextual)
+                content_genre=c.genre if c else "",
+                content_rating=c.contentrating if c else "",
+                content_id=c.id if c else "",
+                content_title=c.title if c else "",
+                content_series=c.series if c else "",
+                content_season=c.season if c else "",
+                content_episode=c.episode if c else None,
+                content_url=c.url if c else "",
+                content_language=c.language if c else "",
+                content_livestream=c.livestream if c else None,
+                content_producer=c.producer.get("name", "") if c and isinstance(c.producer, dict) else "",
+                content_length=c.len if c else None,
+                content_context=c.context if c else None,
+                content_gtax=c.gtax if c else None,
+                content_genres=",".join(c.genres) if c and c.genres else "",
+                channel_name=c.channel.get("name", "") if c and isinstance(c.channel, dict) else "",
+                network_name=c.network.get("name", "") if c and isinstance(c.network, dict) else "",
+                production_quality=str(c.prodq) if c and c.prodq else "",
+                qag_media_rating=str(c.qagmediarating) if c and c.qagmediarating else "",
+                content_categories=",".join(c.cat) if c and c.cat else "",
             )
 
         # Video placement (from first impression)
@@ -308,7 +340,7 @@ class OpenRTBService:
         if imp.video:
             v = imp.video
             video = VideoPlacementInfo(
-                placement=self._map_placement(v.startdelay, v.placement),
+                placement=map_placement(v.startdelay, v.placement),
                 min_duration=v.minduration or self._settings.video.min_duration,
                 max_duration=v.maxduration or self._settings.video.max_duration,
                 skip_enabled=v.skip == 1 if v.skip is not None else None,
@@ -316,8 +348,20 @@ class OpenRTBService:
                 protocols=v.protocols or self._settings.video.supported_vast_protocols,
                 width=v.w,
                 height=v.h,
+                startdelay_raw=v.startdelay,
+                plcmt=v.plcmt,
+                linearity=v.linearity,
+                sequence=v.sequence,
+                minbitrate=v.minbitrate,
+                maxbitrate=v.maxbitrate,
+                playbackmethod=",".join(str(x) for x in v.playbackmethod) if v.playbackmethod else None,
+                delivery=",".join(str(x) for x in v.delivery) if v.delivery else None,
+                video_protocols=",".join(str(x) for x in v.protocols) if v.protocols else None,
                 pod_duration=v.poddur,
                 max_ads_in_pod=v.maxseq,
+                podid=v.podid,
+                podseq=v.podseq,
+                poddedupe=",".join(str(x) for x in v.poddedupe) if v.poddedupe else None,
             )
 
         # Geo
@@ -342,6 +386,20 @@ class OpenRTBService:
             geo_dma=geo_dma,
             num_ads=len(br.imp),
             bid_floor=imp.bidfloor if imp.bidfloor > 0 else None,
+            # Privacy / regulatory signals
+            us_privacy=br.regs.us_privacy if br.regs else None,
+            coppa=br.regs.coppa if br.regs else None,
+            gdpr=br.regs.gdpr if br.regs else None,
+            gdpr_consent=br.regs.consent_string if br.regs else None,
+            gpp=br.regs.gpp if br.regs else None,
+            gpp_sid=",".join(str(s) for s in br.regs.gpp_sid) if br.regs and br.regs.gpp_sid else None,
+            # Blocked signals
+            bcat=",".join(br.bcat) if br.bcat else None,
+            badv=",".join(br.badv) if br.badv else None,
+            # Impression overrides
+            tagid=imp.tagid,
+            imp_exp=imp.exp,
+            bidfloor_override=imp.bidfloor if imp.bidfloor > 0 else None,
         )
 
     # ------------------------------------------------------------------
@@ -365,17 +423,15 @@ class OpenRTBService:
             ad_id = f"ad_{candidate.campaign_id}_{candidate.creative_id}"
 
             # Build VAST XML (adm)
-            tracking_events = self._build_tracking_events(
+            tracking_events = build_tracking_events(
                 base_url, request_id, ad_id, env,
             )
 
-            impression_url = (
-                f"{base_url}/api/v1/event/track?"
-                f"type=impression&req={request_id}&ad={ad_id}&env={env}"
+            impression_url = build_impression_url(
+                base_url, request_id, ad_id, env,
             )
-            error_url = (
-                f"{base_url}/api/v1/event/track?"
-                f"type=error&req={request_id}&ad={ad_id}&env={env}"
+            error_url = build_error_url(
+                base_url, request_id, ad_id, env,
             )
 
             vast_version = self._settings.vast.supported_versions[-1]
@@ -389,9 +445,8 @@ class OpenRTBService:
             #   video_url (i.e. a <MediaFile> will exist in the VAST).
             if candidate.vast_url:
                 # Wrapper – external VAST tag (e.g. demand/DSP response)
-                click_tracking_url = (
-                    f"{base_url}/api/v1/event/track?"
-                    f"type=click&req={request_id}&ad={ad_id}&env={env}"
+                click_tracking_url = build_click_tracking_url(
+                    base_url, request_id, ad_id, env,
                 )
                 vast_xml = build_vast_wrapper_xml(
                     version=vast_version,
@@ -435,23 +490,10 @@ class OpenRTBService:
                 )
                 continue
 
-            # nurl / burl with ${AUCTION_PRICE} macro
-            nurl = (
-                f"{base_url}/api/v1/event/win?"
-                f"req={request_id}&ad={ad_id}"
-                f"&price=${{AUCTION_PRICE}}&env={env}"
-            )
-            burl = (
-                f"{base_url}/api/v1/event/billing?"
-                f"req={request_id}&ad={ad_id}"
-                f"&price=${{AUCTION_PRICE}}&env={env}"
-            )
-            # lurl with ${AUCTION_LOSS} and ${AUCTION_PRICE} macros
-            lurl = (
-                f"{base_url}/api/v1/event/loss?"
-                f"req={request_id}&ad={ad_id}"
-                f"&price=${{AUCTION_PRICE}}&loss=${{AUCTION_LOSS}}&env={env}"
-            )
+            # nurl / burl / lurl (shared builders)
+            nurl = build_nurl(base_url, request_id, ad_id, env)
+            burl = build_burl(base_url, request_id, ad_id, env)
+            lurl = build_lurl(base_url, request_id, ad_id, env)
 
             # Populate adomain from candidate metadata (required by most exchanges)
             adomain: list[str] = candidate.metadata.get("adomain", []) if candidate.metadata else []
@@ -488,111 +530,6 @@ class OpenRTBService:
             seatbid=[SeatBid(bid=bids, seat=self._settings.openrtb.seat_id)],
             cur=br.cur[0] if br.cur else "USD",
         )
-
-    # ------------------------------------------------------------------
-    # Tracking events builder
-    # ------------------------------------------------------------------
-
-    def _build_tracking_events(
-        self, base_url: str, request_id: str, ad_id: str, env: str,
-    ) -> list[TrackingEvent]:
-        """Build VAST tracking event list."""
-        events = [
-            "start", "firstQuartile", "midpoint", "thirdQuartile",
-            "complete", "mute", "unmute", "pause", "resume",
-            "skip", "fullscreen", "exitFullscreen",
-            "close", "acceptInvitation",
-        ]
-        result: list[TrackingEvent] = []
-        for event_name in events:
-            url = (
-                f"{base_url}/api/v1/event/track?"
-                f"type={event_name}&req={request_id}&ad={ad_id}&env={env}"
-            )
-            result.append(TrackingEvent(event=event_name, url=url))
-        return result
-
-    # ------------------------------------------------------------------
-    # Mapping helpers
-    # ------------------------------------------------------------------
-
-    @staticmethod
-    def _map_device_type(device_type: Optional[int]) -> str:
-        """Map IAB device type to internal device_type string."""
-        mapping = {
-            1: "mobile",
-            2: "pc",
-            3: "ctv",               # Connected TV
-            4: "phone",
-            5: "tablet",
-            6: "connected_device",
-            7: "set_top_box",       # STB treated as CTV
-        }
-        return mapping.get(device_type or 0, "unknown")
-
-    @staticmethod
-    def _infer_ifa_type(os: Optional[str]) -> str:
-        """Infer IFA type from OS string or device make."""
-        if not os:
-            return "unknown"
-        os_lower = os.lower()
-        if "roku" in os_lower:
-            return "rida"
-        if "fire" in os_lower or "amazon" in os_lower:
-            return "afai"
-        if "tvos" in os_lower or "apple" in os_lower:
-            return "idfa"
-        if "ios" in os_lower:
-            return "idfa"
-        if "tizen" in os_lower or "samsung" in os_lower:
-            return "tifa"
-        if "webos" in os_lower or "lg" in os_lower:
-            return "lgudid"
-        if "android" in os_lower:
-            return "gaid"
-        if "vizio" in os_lower:
-            return "vida"
-        if "chromecast" in os_lower:
-            return "gaid"
-        if "playstation" in os_lower:
-            return "unknown"
-        if "xbox" in os_lower:
-            return "unknown"
-        return "unknown"
-
-    @staticmethod
-    def _map_connection_type(conn_type: Optional[int]) -> str:
-        """Map IAB connection type."""
-        if conn_type is None:
-            return "unknown"
-        mapping = {
-            1: "ethernet",
-            2: "wifi",
-            3: "cellular_unknown",
-            4: "2g",
-            5: "3g",
-            6: "4g",
-            7: "5g",
-        }
-        return mapping.get(conn_type, "unknown")
-
-    @staticmethod
-    def _map_placement(
-        start_delay: Optional[int],
-        placement: Optional[int],
-    ) -> str:
-        """Map OpenRTB start delay / placement to internal placement string."""
-        if start_delay is not None:
-            if start_delay == 0:
-                return "pre_roll"
-            if start_delay > 0 or start_delay == -1:
-                return "mid_roll"
-            if start_delay == -2:
-                return "post_roll"
-        # Fallback on placement
-        if placement and placement == 1:
-            return "pre_roll"   # In-stream defaults to pre-roll
-        return "pre_roll"
 
     @staticmethod
     def _vast_version_to_protocol(version: str) -> int:

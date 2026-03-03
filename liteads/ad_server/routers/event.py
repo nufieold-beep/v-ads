@@ -23,7 +23,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from liteads.ad_server.services.event_service import EventService
 from liteads.common.database import get_session
 from liteads.common.logger import get_logger, log_context
-from liteads.common.utils import current_timestamp
+from liteads.common.utils import current_timestamp, extract_client_ip
 from liteads.schemas.request import EventRequest
 from liteads.schemas.response import EventResponse
 
@@ -157,9 +157,7 @@ async def track_event_get(
     if err and err != "[ERRORCODE]":
         extra = {"error_code": err}
 
-    client_ip = (
-        x_forwarded_for.split(",")[0].strip() if x_forwarded_for else None
-    ) or (request.client.host if request.client else None)
+    client_ip = extract_client_ip(x_forwarded_for, request.client.host if request.client else None)
 
     # Parse bid price from tracking param
     _win_price = 0.0
@@ -224,9 +222,7 @@ async def win_notification(
     # Record as WIN event with auction clearing price.
     # NOTE: nurl = win notification, NOT impression billing.
     # Impressions are tracked via burl (billing notification) or VAST pixel.
-    client_ip = (
-        x_forwarded_for.split(",")[0].strip() if x_forwarded_for else None
-    ) or (request.client.host if request.client else None)
+    client_ip = extract_client_ip(x_forwarded_for, request.client.host if request.client else None)
 
     await event_service.track_event(
         request_id=req,
@@ -289,9 +285,7 @@ async def loss_notification(
         environment=env,
     )
 
-    client_ip = (
-        x_forwarded_for.split(",")[0].strip() if x_forwarded_for else None
-    ) or (request.client.host if request.client else None)
+    client_ip = extract_client_ip(x_forwarded_for, request.client.host if request.client else None)
 
     await event_service.track_event(
         request_id=req,
@@ -340,9 +334,7 @@ async def billing_notification(
         environment=env,
     )
 
-    client_ip = (
-        x_forwarded_for.split(",")[0].strip() if x_forwarded_for else None
-    ) or (request.client.host if request.client else None)
+    client_ip = extract_client_ip(x_forwarded_for, request.client.host if request.client else None)
 
     await event_service.track_event(
         request_id=req,

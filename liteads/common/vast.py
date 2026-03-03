@@ -31,7 +31,7 @@ class VASTVersion(str, Enum):
     V4_2 = "4.2"
 
 
-@dataclass
+@dataclass(slots=True)
 class TrackingEvent:
     """A single VAST tracking event."""
     event: str          # e.g. "start", "firstQuartile", "midpoint", "thirdQuartile", "complete"

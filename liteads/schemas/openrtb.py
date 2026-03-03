@@ -14,6 +14,8 @@ from typing import Any, Optional
 
 from pydantic import BaseModel, Field, field_validator, model_validator
 
+from liteads.common.device import detect_environment
+
 
 # ============================================================================
 # OpenRTB 2.6 – Bid Request objects
@@ -392,34 +394,10 @@ class BidRequest(BaseModel):
         2. OS is a known CTV platform (Roku, Fire OS, tvOS, Tizen, webOS)
         3. App present with CTV-specific bundle patterns
         """
-        # Device-type based detection (most reliable)
-        if self.device and self.device.devicetype in (3, 7):
-            return "ctv"
-
-        # OS-based detection
-        if self.device and self.device.os:
-            os_lower = self.device.os.lower().replace(" ", "")
-            ctv_os = (
-                "roku", "firetv", "fireos", "tvos", "tizen",
-                "webos", "webostv", "vizio", "androidtv",
-                "chromecast", "playstation", "xbox",
-            )
-            if any(cos in os_lower for cos in ctv_os):
-                return "ctv"
-
-        # UA-based detection (fallback)
-        if self.device and self.device.ua:
-            ua_lower = self.device.ua.lower()
-            ctv_ua = (
-                "smarttv", "smart-tv", "ctv", "roku", "tizen",
-                "webos", "web0s", "firetv", "aftb", "aftm",
-                "appletv", "apple tv", "bravia", "crkey",
-                "chromecast", "vizio", "hbbtv",
-            )
-            if any(marker in ua_lower for marker in ctv_ua):
-                return "ctv"
-
-        return "inapp"
+        os_str = self.device.os if self.device else None
+        ua_str = self.device.ua if self.device else None
+        device_type = self.device.devicetype if self.device else None
+        return detect_environment(os_str or "", ua_str or "", device_type)
 
     @property
     def is_coppa(self) -> bool:
@@ -437,6 +415,20 @@ class BidRequest(BaseModel):
 # ============================================================================
 # OpenRTB 2.6 – Bid Response objects
 # ============================================================================
+
+# DSPs sometimes send mtype as a string (e.g. "CREATIVE_MARKUP_VIDEO")
+# instead of the spec integer.  Coerce gracefully.
+_MTYPE_STR_MAP: dict[str, int] = {
+    "CREATIVE_MARKUP_VIDEO": 2,
+    "CREATIVE_MARKUP_BANNER": 1,
+    "CREATIVE_MARKUP_AUDIO": 4,
+    "CREATIVE_MARKUP_NATIVE": 3,
+    "VIDEO": 2,
+    "BANNER": 1,
+    "AUDIO": 4,
+    "NATIVE": 3,
+}
+
 
 class Bid(BaseModel):
     """Single bid (Section 4.2.3).
@@ -476,19 +468,6 @@ class Bid(BaseModel):
     cattax: Optional[int] = None        # Category taxonomy version
     ext: Optional[dict[str, Any]] = None
 
-    # DSPs sometimes send mtype as a string (e.g. "CREATIVE_MARKUP_VIDEO")
-    # instead of the spec integer.  Coerce gracefully.
-    _MTYPE_STR_MAP: dict[str, int] = {
-        "CREATIVE_MARKUP_VIDEO": 2,
-        "CREATIVE_MARKUP_BANNER": 1,
-        "CREATIVE_MARKUP_AUDIO": 4,
-        "CREATIVE_MARKUP_NATIVE": 3,
-        "VIDEO": 2,
-        "BANNER": 1,
-        "AUDIO": 4,
-        "NATIVE": 3,
-    }
-
     @field_validator("mtype", mode="before")
     @classmethod
     def _coerce_mtype(cls, v: Any) -> int | None:
@@ -499,8 +478,8 @@ class Bid(BaseModel):
         if isinstance(v, str):
             # Try name lookup first, then numeric string
             upper = v.strip().upper()
-            if upper in cls._MTYPE_STR_MAP:
-                return cls._MTYPE_STR_MAP[upper]
+            if upper in _MTYPE_STR_MAP:
+                return _MTYPE_STR_MAP[upper]
             try:
                 return int(v)
             except ValueError:

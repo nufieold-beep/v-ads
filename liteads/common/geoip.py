@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import os
 from dataclasses import dataclass
+from functools import lru_cache
 
 from liteads.common.logger import get_logger
 
@@ -114,12 +115,14 @@ def _ensure_loaded() -> None:
     )
 
 
+@lru_cache(maxsize=8192)
 def lookup(ip: str | None) -> GeoResult:
     """
     Look up geo data for *ip*.
 
     Returns a populated ``GeoResult`` (falling back to defaults when the
     database is unavailable or the IP is unknown).
+    Results are cached (LRU, 8192 entries) to avoid repeated MMDB hits.
     """
     _ensure_loaded()
 
@@ -154,18 +157,21 @@ def lookup(ip: str | None) -> GeoResult:
         return _defaults()
 
 
+# Cached default GeoResult to avoid re-creating identical instances.
+_DEFAULT_GEO_RESULT = GeoResult(
+    country=DEFAULT_GEO["country"],
+    region=DEFAULT_GEO["region"],
+    city=DEFAULT_GEO["city"],
+    zip=DEFAULT_GEO["zip"],
+    lat=DEFAULT_GEO["lat"],
+    lon=DEFAULT_GEO["lon"],
+    metro=DEFAULT_GEO["metro"],
+    type=DEFAULT_GEO["type"],
+    accuracy=DEFAULT_GEO["accuracy"],
+    ipservice=DEFAULT_GEO["ipservice"],
+)
+
+
 def _defaults() -> GeoResult:
     """Return a ``GeoResult`` filled with safe defaults."""
-    d = DEFAULT_GEO
-    return GeoResult(
-        country=d["country"],
-        region=d["region"],
-        city=d["city"],
-        zip=d["zip"],
-        lat=d["lat"],
-        lon=d["lon"],
-        metro=d["metro"],
-        type=d["type"],
-        accuracy=d["accuracy"],
-        ipservice=d["ipservice"],
-    )
+    return _DEFAULT_GEO_RESULT

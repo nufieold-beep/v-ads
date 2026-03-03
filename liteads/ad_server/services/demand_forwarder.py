@@ -139,7 +139,7 @@ _SLIM_IMP_KEYS = {
     "metric", "rwdd", "displaymanager", "displaymanagerver",
     "instl", "tagid",  # tagid leaks internal slot IDs
 }
-_SLIM_DEVICE_KEYS = {"hwv", "pxratio", "js", "w", "h"}
+_SLIM_DEVICE_KEYS = {"hwv", "pxratio", "js"}  # Keep w/h — DSPs use screen size for CTV targeting
 _SLIM_APP_KEYS = {
     "privacypolicy", "paid", "sectioncat", "ver",
 }
@@ -907,7 +907,7 @@ class DemandForwarder:
             boxingallowed=1,     # 1 = allow letter/pillar-boxing
             playbackmethod=playback,
             delivery=delivery,
-            api=[],              # empty = no VPAID/MRAID/OMID
+            api=[7] if not is_ctv else [],  # 7=OMID (in-app); CTV has no MRAID/OMID
             # Ad Pod fields (OpenRTB 2.6 §3.2.7) – DSPs need these
             poddur=v.pod_duration if v and v.pod_duration else None,
             maxseq=v.max_ads_in_pod if v and v.max_ads_in_pod else None,
@@ -933,6 +933,8 @@ class DemandForwarder:
             bidfloor=effective_floor,
             bidfloorcur="USD",
             secure=1,
+            instl=1 if is_ctv else 0,  # CTV is always full-screen
+            exp=ad_request.imp_exp,     # impression expiry from publisher
         )
 
         # ══════════════════════════════════════════════════════════════
@@ -1059,6 +1061,23 @@ class DemandForwarder:
                 if _m:
                     osv = _m.group(1)
 
+            # ── connectiontype (§5.22) ─────────────────────────
+            # CTV devices are typically Ethernet (1) or WiFi (2);
+            # in-app mobile is WiFi (2) or cellular (6=4G, 7=5G).
+            # DSPs bid significantly higher when connectiontype is
+            # present — especially Ethernet for CTV.
+            conn_type: int | None = None
+            if d.connection_type:
+                _ct_map = {
+                    "ethernet": 1, "wifi": 2,
+                    "cellular_unknown": 3, "2g": 4, "3g": 5,
+                    "4g": 6, "5g": 7,
+                }
+                conn_type = _ct_map.get(d.connection_type)
+            if conn_type is None:
+                # Default: CTV → Ethernet, in-app → WiFi
+                conn_type = 1 if is_ctv else 2
+
             device = OrtbDevice(
                 ua=d.ua,
                 dnt=1 if d.lmt else 0,
@@ -1072,8 +1091,11 @@ class DemandForwarder:
                 devicetype=device_type,
                 make=d.make,
                 model=d.model,
+                w=d.screen_width,
+                h=d.screen_height,
                 ifa=d.ifa,
                 lmt=1 if d.lmt else 0,
+                connectiontype=conn_type,
                 didsha1=d.didsha1,
                 didmd5=d.didmd5,
                 sua=sua,

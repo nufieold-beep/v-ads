@@ -26,7 +26,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from liteads.common.cache import CacheKeys, redis_client
 from liteads.common.logger import get_logger
-from liteads.common.utils import current_date, current_hour, safe_divide
+from liteads.common.utils import compute_derived_metrics, current_date, current_hour, safe_divide
 from liteads.models import AdEvent, Advertiser, Campaign, EventType, HourlyStat
 
 logger = get_logger(__name__)
@@ -96,14 +96,13 @@ class AnalyticsService:
         wins = stats["wins"]
         spend = stats["spend"]
 
-        stats["vtr"] = round(safe_divide(stats["completions"], imps), 6)
-        stats["ctr"] = round(safe_divide(stats["clicks"], imps), 6)
-        stats["skip_rate"] = round(safe_divide(stats["skips"], imps), 6)
-        stats["gross_ecpm"] = round(safe_divide(spend * 1000, imps), 4)
-        stats["avg_win_price"] = round(safe_divide(stats["win_price_sum"], wins), 4)
-        stats["bid_request_ecpm"] = round(safe_divide(spend * 1000, ad_reqs), 4)
-        stats["fill_rate_ad_req"] = round(safe_divide(imps, ad_reqs) * 100, 2)
-        stats["fill_rate_ad_ops"] = round(safe_divide(imps, ad_opps) * 100, 2)
+        stats.update(compute_derived_metrics(
+            impressions=imps, ad_requests=ad_reqs,
+            ad_opportunities=ad_opps, wins=wins, spend=spend,
+            win_price_sum=stats["win_price_sum"],
+            completions=stats["completions"],
+            clicks=stats["clicks"], skips=stats["skips"],
+        ))
 
         return {"campaign_id": campaign_id, "hour": hour, **stats}
 
@@ -112,10 +111,15 @@ class AnalyticsService:
         today = current_date()
         totals: dict[str, float] = {f: 0.0 for f in _STAT_FIELDS}
 
+        # Pipeline all 24 hourly hgetall calls into one round-trip
+        pipe = redis_client.pipeline()
         for h in range(24):
             hour_key = f"{today}{h:02d}"
             key = CacheKeys.stat_hourly(campaign_id, hour_key)
-            raw = await redis_client.hgetall(key)
+            pipe.hgetall(key)
+        results = await pipe.execute()
+
+        for raw in results:
             for f in _STAT_FIELDS:
                 totals[f] += float(raw.get(f, "0"))
 
@@ -124,6 +128,14 @@ class AnalyticsService:
         ad_opps = totals["ad_opportunities"]
         wins = totals["wins"]
         spend = totals["spend"]
+
+        derived = compute_derived_metrics(
+            impressions=imps, ad_requests=ad_reqs,
+            ad_opportunities=ad_opps, wins=wins, spend=spend,
+            win_price_sum=totals["win_price_sum"],
+            completions=totals["completions"],
+            clicks=totals["clicks"], skips=totals["skips"],
+        )
 
         return {
             "campaign_id": campaign_id,
@@ -141,14 +153,7 @@ class AnalyticsService:
             "skips": int(totals["skips"]),
             "spend": round(spend, 4),
             "win_price_sum": round(totals["win_price_sum"], 4),
-            "vtr": round(safe_divide(totals["completions"], imps), 6),
-            "ctr": round(safe_divide(totals["clicks"], imps), 6),
-            "skip_rate": round(safe_divide(totals["skips"], imps), 6),
-            "gross_ecpm": round(safe_divide(spend * 1000, imps), 4),
-            "avg_win_price": round(safe_divide(totals["win_price_sum"], wins), 4),
-            "bid_request_ecpm": round(safe_divide(spend * 1000, ad_reqs), 4),
-            "fill_rate_ad_req": round(safe_divide(imps, ad_reqs) * 100, 2),
-            "fill_rate_ad_ops": round(safe_divide(imps, ad_opps) * 100, 2),
+            **derived,
         }
 
     async def get_campaign_budget_status(self, campaign_id: int) -> dict[str, Any]:
@@ -228,18 +233,12 @@ class AnalyticsService:
                 "spend": float(r.spend),
                 "win_price_sum": float(r.win_price_sum),
                 "vtr": float(r.vtr),
-                "gross_ecpm": round(
-                    safe_divide(float(r.spend) * 1000, r.impressions), 4,
-                ),
-                "avg_win_price": round(
-                    safe_divide(float(r.win_price_sum), r.wins), 4,
-                ),
-                "fill_rate_ad_req": round(
-                    safe_divide(r.impressions, r.ad_requests) * 100, 2,
-                ),
-                "fill_rate_ad_ops": round(
-                    safe_divide(r.impressions, r.ad_opportunities) * 100, 2,
-                ),
+                **{k: v for k, v in compute_derived_metrics(
+                    impressions=r.impressions, ad_requests=r.ad_requests,
+                    ad_opportunities=r.ad_opportunities, wins=r.wins,
+                    spend=float(r.spend), win_price_sum=float(r.win_price_sum),
+                    completions=r.completions, clicks=r.clicks, skips=r.skips,
+                ).items() if k != "vtr"},
             }
             for r in rows
         ]
@@ -273,18 +272,26 @@ class AnalyticsService:
 
         summaries: list[dict[str, Any]] = []
         today = current_date()
-        for row in rows:
-            budget_key = f"budget:{row.id}:{today}"
-            raw = await redis_client.hgetall(budget_key)
-            spent_today = float(raw.get("spent_today", "0"))
 
-            # Aggregate today's ad_requests and ad_opportunities from hourly Redis buckets
-            today_ad_reqs = 0
-            today_ad_opps = 0
+        # Pipeline all Redis reads (1 budget + 24 hourly per campaign)
+        # into a single round-trip instead of N×25 sequential calls.
+        pipe = redis_client.pipeline()
+        for row in rows:
+            pipe.hgetall(f"budget:{row.id}:{today}")  # budget key
             for h in range(24):
                 hour_key = f"{today}{h:02d}"
-                stat_key = CacheKeys.stat_hourly(row.id, hour_key)
-                hraw = await redis_client.hgetall(stat_key)
+                pipe.hgetall(CacheKeys.stat_hourly(row.id, hour_key))
+        pipe_results = await pipe.execute()
+
+        idx = 0
+        for row in rows:
+            raw = pipe_results[idx]; idx += 1
+            spent_today = float(raw.get("spent_today", "0"))
+
+            today_ad_reqs = 0
+            today_ad_opps = 0
+            for _h in range(24):
+                hraw = pipe_results[idx]; idx += 1
                 today_ad_reqs += int(hraw.get("ad_requests", "0"))
                 today_ad_opps += int(hraw.get("ad_opportunities", "0"))
 
@@ -620,19 +627,23 @@ class AnalyticsService:
 
         total_imps = totals["impressions"]
 
-        # Get no-bid rate from Redis
+        # Get no-bid rate from Redis — pipeline all reads in one batch
         today = current_date()
         total_ad_reqs = 0
         total_filled = 0
         result2 = await self.session.execute(select(Campaign.id))
         camp_ids = [r[0] for r in result2.all()]
+
+        pipe = redis_client.pipeline()
         for cid in camp_ids:
             for h in range(24):
                 hour_key = f"{today}{h:02d}"
-                rkey = CacheKeys.stat_hourly(cid, hour_key)
-                raw = await redis_client.hgetall(rkey)
-                total_ad_reqs += int(raw.get("ad_requests", "0"))
-                total_filled += int(raw.get("impressions", "0"))
+                pipe.hgetall(CacheKeys.stat_hourly(cid, hour_key))
+        pipe_results = await pipe.execute()
+
+        for raw in pipe_results:
+            total_ad_reqs += int(raw.get("ad_requests", "0"))
+            total_filled += int(raw.get("impressions", "0"))
 
         return {
             "funnel": {
@@ -683,10 +694,14 @@ class AnalyticsService:
         result = await self.session.execute(select(Campaign.id))
         campaign_ids = [r[0] for r in result.all()]
 
-        flushed = 0
+        # Pipeline all Redis reads into one round-trip
+        pipe = redis_client.pipeline()
         for cid in campaign_ids:
-            key = CacheKeys.stat_hourly(cid, hour)
-            raw = await redis_client.hgetall(key)
+            pipe.hgetall(CacheKeys.stat_hourly(cid, hour))
+        all_raw = await pipe.execute()
+
+        flushed = 0
+        for cid, raw in zip(campaign_ids, all_raw):
             if not raw:
                 continue
 
@@ -745,10 +760,14 @@ class AnalyticsService:
         result = await self.session.execute(select(Campaign.id))
         campaign_ids = [r[0] for r in result.all()]
 
-        updated = 0
+        # Pipeline all Redis reads into one round-trip
+        pipe = redis_client.pipeline()
         for cid in campaign_ids:
-            budget_key = f"budget:{cid}:{today}"
-            raw = await redis_client.hgetall(budget_key)
+            pipe.hgetall(f"budget:{cid}:{today}")
+        all_raw = await pipe.execute()
+
+        updated = 0
+        for cid, raw in zip(campaign_ids, all_raw):
             if not raw:
                 continue
 

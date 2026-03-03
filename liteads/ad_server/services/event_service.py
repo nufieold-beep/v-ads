@@ -28,6 +28,57 @@ from liteads.ad_server.middleware.metrics import (
 
 logger = get_logger(__name__)
 
+# ── Module-level constants (avoid re-creation per call) ──────────────────
+_DECIMAL_1000 = Decimal("1000")
+_DECIMAL_ZERO = Decimal("0.000000")
+_EVENT_TYPE_MAP: dict[str, int] = {
+    # Core VAST events
+    "impression": EventType.IMPRESSION,
+    "imp": EventType.IMPRESSION,
+    "start": EventType.START,
+    "firstquartile": EventType.FIRST_QUARTILE,
+    "first_quartile": EventType.FIRST_QUARTILE,
+    "midpoint": EventType.MIDPOINT,
+    "thirdquartile": EventType.THIRD_QUARTILE,
+    "third_quartile": EventType.THIRD_QUARTILE,
+    "complete": EventType.COMPLETE,
+    "click": EventType.CLICK,
+    "skip": EventType.SKIP,
+    "mute": EventType.MUTE,
+    "unmute": EventType.UNMUTE,
+    "pause": EventType.PAUSE,
+    "resume": EventType.RESUME,
+    "fullscreen": EventType.FULLSCREEN,
+    "error": EventType.ERROR,
+    # Extended VAST events
+    "close": EventType.CLOSE,
+    "acceptinvitation": EventType.ACCEPT_INVITATION,
+    "accept_invitation": EventType.ACCEPT_INVITATION,
+    "exitfullscreen": EventType.EXIT_FULLSCREEN,
+    "exit_fullscreen": EventType.EXIT_FULLSCREEN,
+    "expand": EventType.EXPAND,
+    "collapse": EventType.COLLAPSE,
+    "rewind": EventType.REWIND,
+    "progress": EventType.PROGRESS,
+    "loaded": EventType.LOADED,
+    "creativeview": EventType.CREATIVE_VIEW,
+    "creative_view": EventType.CREATIVE_VIEW,
+    # OpenRTB auction events
+    "loss": EventType.LOSS,
+    "win": EventType.WIN,
+}
+
+_STAT_FIELD_MAP: dict[int, str] = {
+    EventType.IMPRESSION: "impressions",
+    EventType.START: "starts",
+    EventType.FIRST_QUARTILE: "first_quartiles",
+    EventType.MIDPOINT: "midpoints",
+    EventType.THIRD_QUARTILE: "third_quartiles",
+    EventType.COMPLETE: "completions",
+    EventType.CLICK: "clicks",
+    EventType.SKIP: "skips",
+}
+
 
 class EventService:
     """Video event tracking service with CPM billing."""
@@ -150,21 +201,47 @@ class EventService:
             self.session.add(event)
             await self.session.flush()
 
-            # Update real-time stats in Redis
-            await self._update_stats(campaign_id, event_type_enum, win_price=win_price)
+            # ── Batch all Redis updates into a single pipeline ─────
+            # Previously 3-5 separate round-trips; now 1.
+            hour = current_hour()
+            stat_key = CacheKeys.stat_hourly(campaign_id, hour) if campaign_id is not None else None
 
-            # Update budget spend on impression (CPM billing)
+            pipe = redis_client.pipeline()
+
+            # 1. Real-time stat counter
+            if stat_key:
+                field_name = _STAT_FIELD_MAP.get(
+                    EventType(event_type_enum) if event_type_enum in EventType else event_type_enum  # type: ignore[arg-type]
+                )
+                if field_name:
+                    pipe.hincrby(stat_key, field_name, 1)
+                if event_type_enum == EventType.WIN and win_price > 0:
+                    pipe.hincrby(stat_key, "wins", 1)
+                    pipe.hincrbyfloat(stat_key, "win_price_sum", win_price)
+                pipe.expire(stat_key, 48 * 3600)
+
+            # 2. Budget spend + hourly spend (impression only)
             if event_type_enum == EventType.IMPRESSION and campaign_id is not None:
-                await self._update_budget_spend(campaign_id, cost)
-                # Also track spend in hourly stats
                 if cost > 0:
-                    hour = current_hour()
-                    key = CacheKeys.stat_hourly(campaign_id, hour)
-                    await redis_client.hincrbyfloat(key, "spend", float(cost))
+                    today = current_date()
+                    budget_key = f"budget:{campaign_id}:{today}"
+                    pipe.hincrbyfloat(budget_key, "spent_today", float(cost))
+                    pipe.hincrbyfloat(budget_key, "spent_total", float(cost))
+                    pipe.expire(budget_key, 86400 * 2)
+                    if stat_key:
+                        pipe.hincrbyfloat(stat_key, "spend", float(cost))
 
-            # Update frequency counter on impression
-            if event_type_enum == EventType.IMPRESSION and user_id:
-                await self._update_frequency(user_id, campaign_id)
+            # 3. Frequency counter (impression + has user_id)
+            if event_type_enum == EventType.IMPRESSION and user_id and campaign_id is not None:
+                today = current_date()
+                daily_key = CacheKeys.freq_daily(user_id, campaign_id, today)
+                hourly_key = CacheKeys.freq_hourly(user_id, campaign_id, hour)
+                pipe.incr(daily_key)
+                pipe.expire(daily_key, 24 * 3600)
+                pipe.incr(hourly_key)
+                pipe.expire(hourly_key, 3600)
+
+            await pipe.execute()
 
             # ── Prometheus delivery-health metrics ─────────────────
             cid_str = str(campaign_id) if campaign_id else "unknown"
@@ -237,43 +314,7 @@ class EventService:
 
         Supports all VAST 2.x–4.x event names, plus OpenRTB loss.
         """
-        mapping = {
-            # Core VAST events
-            "impression": EventType.IMPRESSION,
-            "imp": EventType.IMPRESSION,
-            "start": EventType.START,
-            "firstquartile": EventType.FIRST_QUARTILE,
-            "first_quartile": EventType.FIRST_QUARTILE,
-            "midpoint": EventType.MIDPOINT,
-            "thirdquartile": EventType.THIRD_QUARTILE,
-            "third_quartile": EventType.THIRD_QUARTILE,
-            "complete": EventType.COMPLETE,
-            "click": EventType.CLICK,
-            "skip": EventType.SKIP,
-            "mute": EventType.MUTE,
-            "unmute": EventType.UNMUTE,
-            "pause": EventType.PAUSE,
-            "resume": EventType.RESUME,
-            "fullscreen": EventType.FULLSCREEN,
-            "error": EventType.ERROR,
-            # Extended VAST events
-            "close": EventType.CLOSE,
-            "acceptinvitation": EventType.ACCEPT_INVITATION,
-            "accept_invitation": EventType.ACCEPT_INVITATION,
-            "exitfullscreen": EventType.EXIT_FULLSCREEN,
-            "exit_fullscreen": EventType.EXIT_FULLSCREEN,
-            "expand": EventType.EXPAND,
-            "collapse": EventType.COLLAPSE,
-            "rewind": EventType.REWIND,
-            "progress": EventType.PROGRESS,
-            "loaded": EventType.LOADED,
-            "creativeview": EventType.CREATIVE_VIEW,
-            "creative_view": EventType.CREATIVE_VIEW,
-            # OpenRTB auction events
-            "loss": EventType.LOSS,
-            "win": EventType.WIN,
-        }
-        return mapping.get(event_type.lower())
+        return _EVENT_TYPE_MAP.get(event_type.lower())
 
     async def _calculate_cpm_cost(self, campaign_id: int) -> Decimal:
         """Calculate CPM cost per impression.
@@ -285,7 +326,7 @@ class EventService:
             cache_key = f"campaign:cpm:{campaign_id}"
             cached_cpm = await redis_client.get(cache_key)
             if cached_cpm:
-                return Decimal(cached_cpm) / Decimal("1000")
+                return Decimal(cached_cpm) / _DECIMAL_1000
 
             # Fall back to DB
             result = await self.session.execute(
@@ -295,9 +336,9 @@ class EventService:
             if bid_amount:
                 # Cache the CPM bid for 5 minutes
                 await redis_client.set(cache_key, str(bid_amount), ttl=300)
-                return Decimal(str(bid_amount)) / Decimal("1000")
+                return Decimal(str(bid_amount)) / _DECIMAL_1000
 
-            return Decimal("0.000000")
+            return _DECIMAL_ZERO
         except Exception as e:
             logger.warning(f"Failed to calculate CPM cost for campaign {campaign_id}: {e}")
             return Decimal("0.000000")
@@ -311,9 +352,11 @@ class EventService:
         key = f"budget:{campaign_id}:{today}"
 
         try:
-            await redis_client.hincrbyfloat(key, "spent_today", float(cost))
-            await redis_client.hincrbyfloat(key, "spent_total", float(cost))
-            await redis_client.expire(key, 86400 * 2)
+            pipe = redis_client.pipeline()
+            pipe.hincrbyfloat(key, "spent_today", float(cost))
+            pipe.hincrbyfloat(key, "spent_total", float(cost))
+            pipe.expire(key, 86400 * 2)
+            await pipe.execute()
         except Exception as e:
             logger.error(f"Failed to update budget spend for campaign {campaign_id}: {e}")
 
@@ -327,19 +370,7 @@ class EventService:
         hour = current_hour()
         key = CacheKeys.stat_hourly(campaign_id, hour)
 
-        # Map event types to stat fields
-        stat_field_map = {
-            EventType.IMPRESSION: "impressions",
-            EventType.START: "starts",
-            EventType.FIRST_QUARTILE: "first_quartiles",
-            EventType.MIDPOINT: "midpoints",
-            EventType.THIRD_QUARTILE: "third_quartiles",
-            EventType.COMPLETE: "completions",
-            EventType.CLICK: "clicks",
-            EventType.SKIP: "skips",
-        }
-
-        field_name = stat_field_map.get(EventType(event_type) if event_type in EventType else event_type)  # type: ignore[arg-type]
+        field_name = _STAT_FIELD_MAP.get(EventType(event_type) if event_type in EventType else event_type)  # type: ignore[arg-type]
 
         # Use a pipeline to batch Redis round-trips (critical for QPS)
         pipe = redis_client.pipeline()
@@ -364,12 +395,14 @@ class EventService:
         hour = current_hour()
 
         daily_key = CacheKeys.freq_daily(user_id, campaign_id, today)
-        await redis_client.incr(daily_key)
-        await redis_client.expire(daily_key, 24 * 3600)
-
         hourly_key = CacheKeys.freq_hourly(user_id, campaign_id, hour)
-        await redis_client.incr(hourly_key)
-        await redis_client.expire(hourly_key, 3600)
+
+        pipe = redis_client.pipeline()
+        pipe.incr(daily_key)
+        pipe.expire(daily_key, 24 * 3600)
+        pipe.incr(hourly_key)
+        pipe.expire(hourly_key, 3600)
+        await pipe.execute()
 
     # ------------------------------------------------------------------
     # Ad request / opportunity tracking (called from router layer)
@@ -393,8 +426,10 @@ class EventService:
             await pipe.execute()
         else:
             key = CacheKeys.stat_hourly(0, hour)  # global
-            await redis_client.hincrby(key, "ad_requests", 1)
-            await redis_client.expire(key, 48 * 3600)
+            pipe = redis_client.pipeline()
+            pipe.hincrby(key, "ad_requests", 1)
+            pipe.expire(key, 48 * 3600)
+            await pipe.execute()
 
     @staticmethod
     async def track_ad_opportunity(campaign_ids: list[int]) -> None:
