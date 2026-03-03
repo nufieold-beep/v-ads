@@ -111,6 +111,18 @@ class DatabaseManager:
         finally:
             await session.close()
 
+    @asynccontextmanager
+    async def read_session(self) -> AsyncGenerator[AsyncSession, None]:
+        """Read-only session — skips COMMIT to save a DB round-trip.
+
+        Use for queries that never write (e.g. supply tag / mapping lookups).
+        """
+        session = self.session_factory()
+        try:
+            yield session
+        finally:
+            await session.close()
+
     async def execute(self, query: Any, params: dict[str, Any] | None = None) -> Any:
         """Execute a raw SQL query."""
         async with self.session() as session:

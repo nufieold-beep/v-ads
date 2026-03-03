@@ -45,6 +45,10 @@ from liteads.schemas.internal import AdCandidate
 
 logger = get_logger(__name__)
 
+# Module-level singletons (immutable, created once)
+_settings = get_settings()
+_default_pod_builder = PodBuilder()
+
 
 class OpenRTBService:
     """
@@ -60,8 +64,8 @@ class OpenRTBService:
 
     def __init__(self, ad_service: AdService):
         self._ad_service = ad_service
-        self._settings = get_settings()
-        self._pod_builder = PodBuilder()
+        self._settings = _settings
+        self._pod_builder = _default_pod_builder
 
     # ------------------------------------------------------------------
     # Public API

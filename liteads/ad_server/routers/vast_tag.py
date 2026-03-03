@@ -31,7 +31,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from liteads.ad_server.services.ad_service import AdService
-from liteads.ad_server.services.demand_forwarder import DemandForwarder
+from liteads.ad_server.services.demand_forwarder import DemandForwarder, _get_http_client
 from liteads.ad_server.services.event_service import EventService
 from liteads.ad_server.services.vast_builder import build_vast_for_candidate
 from liteads.common.config import get_settings
@@ -104,9 +104,13 @@ def _get_ad_service(session: AsyncSession = Depends(get_session)) -> AdService:
     return AdService(session)
 
 
+# Module-level singleton (DemandForwarder is stateless — creates its own session)
+_demand_forwarder = DemandForwarder()
+
+
 def _get_demand_forwarder() -> DemandForwarder:
     """Dependency to get demand forwarder (uses its own DB session)."""
-    return DemandForwarder()
+    return _demand_forwarder
 
 # ---------------------------------------------------------------------------
 # Helpers – delegated to common.device / common.tracking
@@ -296,7 +300,7 @@ async def vast_tag(
         environment=env,
     )
 
-    logger.info(
+    logger.debug(
         "VAST tag request received",
         request_id=request_id,
         environment=env,
@@ -346,10 +350,10 @@ async def vast_tag(
     )
 
     # Build GeoInfo — use publisher data if sent, otherwise enrich from IP
-    _has_geo = any([
-        lat is not None, lon is not None, country_code,
-        region, metro, city, zip_code,
-    ])
+    _has_geo = (
+        lat is not None or lon is not None or country_code
+        or region or metro or city or zip_code
+    )
     if _has_geo:
         geo = GeoInfo(
             ip=raw_ip,
@@ -480,10 +484,10 @@ async def vast_tag(
             demand_candidates = []
 
         # Merge and sort by bid (highest first)
-        candidates = list(local_candidates) + list(demand_candidates)
+        candidates = [*local_candidates, *demand_candidates]
         candidates.sort(key=lambda c: c.bid, reverse=True)
 
-        logger.info(
+        logger.debug(
             "Pipeline results merged",
             request_id=request_id,
             local_count=len(local_candidates),
@@ -522,7 +526,7 @@ async def vast_tag(
         )
 
     if not candidates:
-        logger.info("VAST tag no fill", request_id=request_id)
+        logger.debug("VAST tag no fill", request_id=request_id)
         return _empty_vast_response(request_id)
 
     # Take first candidate -------------------------------------------------
@@ -627,7 +631,7 @@ async def vast_tag(
             )
             return _empty_vast_response(request_id)
 
-    logger.info(
+    logger.debug(
         "VAST tag served",
         request_id=request_id,
         ad_id=ad_id,
@@ -745,8 +749,6 @@ async def _fire_win_notice(nurl: str, price: float) -> None:
     Replaces ``${AUCTION_PRICE}`` macro with the actual clearing price.
     """
     try:
-        from liteads.ad_server.services.demand_forwarder import _get_http_client
-
         resolved_url = nurl.replace("${AUCTION_PRICE}", str(round(price, 4)))
         client = _get_http_client()
         await client.get(resolved_url, timeout=2.0)

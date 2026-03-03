@@ -20,6 +20,15 @@ import uuid
 from typing import Any, Optional
 
 from liteads.common.logger import get_logger
+from liteads.common.geoip import geoip_to_ortb_geo
+from liteads.schemas.openrtb import (
+    App as OrtbApp,
+    Device as OrtbDevice,
+    Publisher as OrtbPublisher,
+    Regs as OrtbRegs,
+    Source as OrtbSource,
+    Video as OrtbVideo,
+)
 
 logger = get_logger(__name__)
 
@@ -132,7 +141,6 @@ def enrich_bid_request(
 
         # -- Video --
         if imp.video is None:
-            from liteads.schemas.openrtb import Video as OrtbVideo
             imp.video = OrtbVideo(**_DEFAULTS_VIDEO)
             enriched_fields.append("imp.video (created)")
         else:
@@ -145,7 +153,6 @@ def enrich_bid_request(
 
     # ── 3. Device ─────────────────────────────────────────────────────
     if br.device is None:
-        from liteads.schemas.openrtb import Device as OrtbDevice
         br.device = OrtbDevice(
             ip=client_ip or "",
             ua=user_agent or "",
@@ -179,7 +186,6 @@ def enrich_bid_request(
 
     # ── 5. App / Publisher ────────────────────────────────────────────
     if br.app is None:
-        from liteads.schemas.openrtb import App as OrtbApp, Publisher as OrtbPublisher
         br.app = OrtbApp(
             id=slot_id or "APP_ID",
             name="APP_NAME",
@@ -195,13 +201,11 @@ def enrich_bid_request(
 
         # Publisher
         if app.publisher is None:
-            from liteads.schemas.openrtb import Publisher as OrtbPublisher
             app.publisher = OrtbPublisher(id=slot_id or "PUB_ID")
             enriched_fields.append("app.publisher (created)")
 
     # ── 6. Source — only fill fd/tid if completely missing ─────────────
     if br.source is None:
-        from liteads.schemas.openrtb import Source as OrtbSource
         br.source = OrtbSource(
             fd=1,
             tid=br.id,
@@ -210,13 +214,12 @@ def enrich_bid_request(
 
     # ── 7. Regs — only fill coppa if completely missing ───────────────
     if br.regs is None:
-        from liteads.schemas.openrtb import Regs as OrtbRegs
         br.regs = OrtbRegs(coppa=0)
         enriched_fields.append("regs (created)")
 
     # Log summary
     if enriched_fields:
-        logger.info(
+        logger.debug(
             "ORTB request auto-enriched",
             request_id=br.id,
             enriched_count=len(enriched_fields),
@@ -241,8 +244,6 @@ def _enrich_geo(br: Any, enriched_fields: list[str]) -> None:
         return
 
     try:
-        from liteads.common.geoip import geoip_to_ortb_geo
-
         ortb_geo = geoip_to_ortb_geo(br.device.ip)
         if ortb_geo is not None:
             br.device.geo = ortb_geo

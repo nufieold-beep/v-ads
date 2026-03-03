@@ -377,5 +377,6 @@ def get_settings() -> Settings:
     return Settings(**flat_config)
 
 
-# Convenience alias
+# Convenience alias — callers should prefer get_settings() directly.
+# This is kept for backward compatibility with `from liteads.common.config import settings`.
 settings = get_settings()

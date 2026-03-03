@@ -111,7 +111,11 @@ def create_app() -> FastAPI:
     async def clean_vast_query_params(request: Request, call_next: Any) -> Any:
         if request.url.path.startswith("/api/vast"):
             raw_qs = request.scope.get("query_string", b"").decode("latin-1")
-            if raw_qs:
+            # Fast pre-check: only parse/rebuild when dirty patterns detected
+            if raw_qs and (
+                "={" in raw_qs or "=%7B" in raw_qs.upper()
+                or "=&" in raw_qs or raw_qs.endswith("=")
+            ):
                 pairs = parse_qs(raw_qs, keep_blank_values=True)
                 cleaned: dict[str, list[str]] = {}
                 for key, vals in pairs.items():
@@ -134,7 +138,14 @@ def create_app() -> FastAPI:
     # Request logging middleware
     @app.middleware("http")
     async def logging_middleware(request: Request, call_next: Any) -> Any:
-        """Log all requests with timing."""
+        """Log all requests with timing (skip hot-path to reduce overhead)."""
+        path = request.url.path
+
+        # Skip logging overhead for high-frequency hot paths and health checks.
+        # VAST endpoint has its own request_id and logging; health/metrics are noise.
+        if path.startswith(("/api/vast", "/health", "/ping", "/live", "/ready", "/metrics")):
+            return await call_next(request)
+
         request_id = generate_request_id()
         log_context(request_id=request_id)
 
@@ -147,7 +158,7 @@ def create_app() -> FastAPI:
         logger.info(
             "Request completed",
             method=request.method,
-            path=request.url.path,
+            path=path,
             status_code=response.status_code,
             duration_ms=round(duration_ms, 2),
         )

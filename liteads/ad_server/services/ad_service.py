@@ -18,6 +18,14 @@ from liteads.schemas.request import AdRequest
 
 logger = get_logger(__name__)
 
+# Module-level config singleton (immutable, created once)
+_REC_CONFIG = RecommendationConfig(
+    max_retrieval=200,
+    enable_budget_filter=True,
+    enable_frequency_filter=True,
+    enable_quality_filter=True,
+)
+
 
 class AdService:
     """CPM video ad serving service for CTV and In-App environments."""
@@ -31,18 +39,9 @@ class AdService:
     def engine(self) -> RecommendationEngine:
         """Lazy initialization of recommendation engine."""
         if self._engine is None:
-            config = RecommendationConfig(
-                # Widen the retrieval funnel to feed more candidates
-                # into the ranking stage → better auction competition.
-                max_retrieval=200,
-
-                enable_budget_filter=True,
-                enable_frequency_filter=True,
-                enable_quality_filter=True,
-            )
             self._engine = RecommendationEngine(
                 session=self.session,
-                config=config,
+                config=_REC_CONFIG,
             )
         return self._engine
 
@@ -86,7 +85,7 @@ class AdService:
                     removed=before - len(candidates),
                 )
 
-        logger.info(
+        logger.debug(
             "Video ad serving completed",
             request_id=request_id,
             environment=request.environment,

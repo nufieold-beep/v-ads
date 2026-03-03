@@ -152,7 +152,7 @@ class EventService:
                     cost = await self._calculate_cpm_cost(campaign_id)
                 elif win_price > 0:
                     # Demand fill — cost = bid_price / 1000 (CPM → per-impression)
-                    cost = Decimal(str(round(win_price / 1000, 6)))
+                    cost = Decimal(win_price) / Decimal(1000)
 
             # Build & persist AdEvent (single construction for both paths)
             event = AdEvent(
@@ -247,7 +247,7 @@ class EventService:
             except Exception:
                 pass  # Metrics must never break event tracking
 
-            logger.info(
+            logger.debug(
                 "Video event tracked",
                 event_type=event_type,
                 campaign_id=campaign_id,

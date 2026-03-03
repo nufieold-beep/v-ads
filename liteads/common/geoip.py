@@ -182,11 +182,8 @@ def _defaults() -> GeoResult:
 # ---------------------------------------------------------------------------
 
 def geoip_to_geo_info(ip: str | None) -> "GeoInfo":
-    """Look up *ip* and return a ``GeoInfo`` schema (used by VAST-tag router).
-
-    Lazily imports to avoid circular dependency with ``schemas.request``.
-    """
-    from liteads.schemas.request import GeoInfo
+    """Look up *ip* and return a ``GeoInfo`` schema (used by VAST-tag router)."""
+    from liteads.schemas.request import GeoInfo  # avoid circular at module level
 
     g = lookup(ip)
     return GeoInfo(
@@ -209,7 +206,7 @@ def geoip_to_ortb_geo(ip: str | None) -> "OrtbGeo | None":
     Returns ``None`` when the lookup yields no country (MaxMind DB unavailable
     or the IP is unknown).
     """
-    from liteads.schemas.openrtb import Geo as OrtbGeo
+    from liteads.schemas.openrtb import Geo as OrtbGeo  # avoid circular at module level
 
     g = lookup(ip)
     if not g or not g.country:

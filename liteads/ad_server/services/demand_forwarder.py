@@ -153,7 +153,10 @@ _SLIM_TOP_KEYS = {"wlang", "cattax"}
 
 
 def _slim_payload(payload: dict) -> dict:
-    """Remove heavy optional fields to shrink payload for faster DSP response.
+    """Remove heavy optional fields AND strip empties in a single pass.
+
+    Combines the work of the old _strip_empty + _slim_payload into one
+    traversal to avoid O(n) triple-walk of the ORTB payload dict tree.
 
     Keeps ALL targeting-critical and compliance-critical fields:
     - source.fd, source.tid (required for transaction tracking)
@@ -163,9 +166,10 @@ def _slim_payload(payload: dict) -> dict:
     - imp.exp (impression expiry)
     - video pod fields: poddur, maxseq, podid, podseq, poddedupe
     """
-    # Top-level
+    # Top-level: slim + strip empties
     for k in _SLIM_TOP_KEYS:
         payload.pop(k, None)
+    _strip_dict_empties(payload)
 
     # Video object inside each imp
     for imp in payload.get("imp", []):
@@ -175,24 +179,38 @@ def _slim_payload(payload: dict) -> dict:
         if video:
             for k in _SLIM_VIDEO_KEYS:
                 video.pop(k, None)
+            _strip_dict_empties(video)
+        _strip_dict_empties(imp)
 
     # Device — strip non-essential screen/JS fields
     dev = payload.get("device")
     if dev:
         for k in _SLIM_DEVICE_KEYS:
             dev.pop(k, None)
+        geo = dev.get("geo")
+        if geo:
+            _strip_dict_empties(geo)
+        sua = dev.get("sua")
+        if sua:
+            _strip_dict_empties(sua)
+        _strip_dict_empties(dev)
 
     # App — strip non-essential policy fields
     app = payload.get("app")
     if app:
         for k in _SLIM_APP_KEYS:
             app.pop(k, None)
+        pub = app.get("publisher")
+        if pub:
+            _strip_dict_empties(pub)
+        _strip_dict_empties(app)
 
     # Content — strip verbose fields DSPs don't use
     content = app.get("content") if app else None
     if content:
         for k in ("sourcerelationship", "embeddable", "cattax", "producer"):
             content.pop(k, None)
+        _strip_dict_empties(content)
 
     # Source — strip schain (target schema uses fd+tid only)
     source = payload.get("source")
@@ -200,6 +218,7 @@ def _slim_payload(payload: dict) -> dict:
         source.pop("schain", None)
         source.pop("pchain", None)
         source.pop("ext", None)
+        _strip_dict_empties(source)
 
     # Regs — strip ext and gpp string (keep gpp_sid — DSPs need it)
     regs = payload.get("regs")
@@ -209,14 +228,29 @@ def _slim_payload(payload: dict) -> dict:
         # Rename gpp_sid → gppSid (camelCase) to match real SSP convention
         if "gpp_sid" in regs:
             regs["gppSid"] = regs.pop("gpp_sid")
+        _strip_dict_empties(regs)
 
     # User — strip verbose fields, keep id + eids
     user = payload.get("user")
     if user:
         user.pop("customdata", None)  # never reveal we are a VAST wrapper
-        # Keep user.id and user.ext — DSPs use them for identity
+        _strip_dict_empties(user)
 
     return payload
+
+
+def _strip_dict_empties(d: dict) -> None:
+    """Remove empty lists/dicts from a dict (single-level, non-recursive).
+
+    Only removes keys whose values are empty containers, EXCEPT for
+    keys in ``_KEEP_EMPTY`` which DSPs interpret semantically.
+    """
+    to_del = [
+        k for k, v in d.items()
+        if isinstance(v, (list, dict)) and len(v) == 0 and k not in _KEEP_EMPTY
+    ]
+    for k in to_del:
+        del d[k]
 
 
 def _stable_hash_id(value: str) -> int:
@@ -269,11 +303,10 @@ class DemandForwarder:
         Returns a list of ``AdCandidate`` objects from demand sources that
         can be merged with local campaign candidates and ranked together.
         """
-        from liteads.common.database import db
+        from liteads.common.database import db  # deferred to avoid circular import at module load
 
-        # Use a dedicated session so we don't conflict with the local
-        # campaign pipeline that runs concurrently on a different session.
-        async with db.session() as session:
+        # Use a read-only session (no COMMIT needed — only reads supply tags/mappings)
+        async with db.read_session() as session:
             return await self._do_forward(session, ad_request, request_id)
 
     async def _do_forward(
@@ -301,7 +334,7 @@ class DemandForwarder:
             )
             return []
 
-        logger.info(
+        logger.debug(
             "Forwarding to demand sources",
             request_id=request_id,
             supply_tag=supply_tag.name,
@@ -355,7 +388,7 @@ class DemandForwarder:
             elif isinstance(result, AdCandidate):
                 candidates.append(result)
 
-        logger.info(
+        logger.debug(
             "Demand forwarding complete",
             request_id=request_id,
             total_candidates=len(candidates),
@@ -464,10 +497,7 @@ class DemandForwarder:
 
         bid_payload = bid_request.model_dump(exclude_none=True)
 
-        # Strip empty lists/dicts in-place for cleaner payload (DSPs don't need them)
-        _strip_empty(bid_payload)
-
-        # Slim down payload for faster DSP response (0.2s vs 1.3-2.5s)
+        # Single-pass: strip empties + slim payload (combined, no triple traversal)
         _slim_payload(bid_payload)
 
         # ── Build headers ──
@@ -535,7 +565,7 @@ class DemandForwarder:
             if attempt > 0:
                 # Exponential backoff: 50ms, 100ms, ...
                 await asyncio.sleep(_RETRY_BACKOFF_MS * (2 ** (attempt - 1)) / 1000.0)
-                logger.info(
+                logger.debug(
                     "Retrying ORTB request",
                     endpoint=endpoint.name,
                     attempt=attempt + 1,
@@ -612,18 +642,12 @@ class DemandForwarder:
                 else:
                     stats["total_nobids"] += 1
 
-                logger.info(
+                logger.debug(
                     "ORTB response received",
                     endpoint=endpoint.name,
                     request_id=request_id,
                     latency_ms=round(elapsed_ms, 1),
                     num_candidates=len(candidates),
-                    fill_rate_pct=round(
-                        stats["total_bids"]
-                        / max(stats["total_requests"], 1)
-                        * 100,
-                        1,
-                    ),
                 )
                 return candidates
 
@@ -914,7 +938,7 @@ class DemandForwarder:
         )
 
         imp = Imp(
-            id=uuid.uuid4().hex[:16].upper(),  # random hex like real SSPs
+            id=uuid.uuid4().hex[:16],  # random hex like real SSPs
             video=video,
             bidfloor=effective_floor,
             bidfloorcur="USD",
@@ -1129,18 +1153,18 @@ class DemandForwarder:
         content = None
         if ad_request.app:
             a = ad_request.app
-            has_content = any([
-                a.content_id, a.content_title, a.content_series,
-                a.content_season, a.content_genre, a.content_url,
-                a.content_language, a.content_producer,
-                a.content_livestream is not None,
-                a.production_quality, a.qag_media_rating,
-                a.content_categories, a.channel_name, a.network_name,
-                a.content_episode is not None,
-                a.content_context is not None,
-                a.content_gtax is not None, a.content_genres,
-                a.content_length is not None,
-            ])
+            has_content = bool(
+                a.content_id or a.content_title or a.content_series
+                or a.content_season or a.content_genre or a.content_url
+                or a.content_language or a.content_producer
+                or a.content_livestream is not None
+                or a.production_quality or a.qag_media_rating
+                or a.content_categories or a.channel_name or a.network_name
+                or a.content_episode is not None
+                or a.content_context is not None
+                or a.content_gtax is not None or a.content_genres
+                or a.content_length is not None
+            )
             if has_content:
                 prodq_val = None
                 if a.production_quality:
@@ -1319,11 +1343,13 @@ class DemandForwarder:
 
     @staticmethod
     def _replace_auction_macros(text: str | None, price: float) -> str | None:
-        """Replace ``${AUCTION_PRICE}`` (case-insensitive) in *text*."""
+        """Replace ``${AUCTION_PRICE}`` in *text* with formatted price."""
         if not text:
             return text
+        if "${AUCTION_PRICE}" not in text:
+            return text
         formatted = f"{price:.2f}"
-        return re.sub(r"\$\{AUCTION_PRICE\}", formatted, text, flags=re.IGNORECASE)
+        return text.replace("${AUCTION_PRICE}", formatted)
 
     @staticmethod
     def _extract_candidates(
@@ -1394,7 +1420,7 @@ class DemandForwarder:
 
                 candidates.append(candidate)
 
-                logger.info(
+                logger.debug(
                     "Demand bid received",
                     request_id=request_id,
                     endpoint=endpoint.name,
@@ -1420,6 +1446,10 @@ class DemandForwarder:
         device fields.  Curly-brace macros like ``{uip}`` are replaced
         globally; ``[replace_me]`` macros are keyed by query-param name.
         """
+        # ── Fast exit: if no macro tokens in URL, skip the whole thing ──
+        if "{" not in url and "[replace_me]" not in url and "[CACHEBUSTER]" not in url and "[IP]" not in url and "[UA]" not in url:
+            return url
+
         # ── Extract device fields ────────────────────────────────
         ip = ua = ifa = make = model = os_str = isp_str = ""
         dnt_str = "0"

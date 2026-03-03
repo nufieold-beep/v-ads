@@ -9,6 +9,7 @@ Provides:
 """
 
 import time
+from functools import lru_cache
 from typing import Callable
 
 from fastapi import Request, Response
@@ -187,12 +188,10 @@ class MetricsMiddleware(BaseHTTPMiddleware):
                 endpoint=endpoint,
             ).dec()
 
-    def _get_endpoint(self, request: Request) -> str:
-        """Get endpoint path, normalizing path parameters."""
-        path = request.url.path
-
-        # Normalize common path patterns
-        # e.g., /api/v1/ad/123 -> /api/v1/ad/{id}
+    @staticmethod
+    @lru_cache(maxsize=256)
+    def _normalize_path(path: str) -> str:
+        """Normalize path with LRU cache to avoid repeated string ops."""
         parts = path.split("/")
         normalized = []
         for part in parts:
@@ -200,8 +199,11 @@ class MetricsMiddleware(BaseHTTPMiddleware):
                 normalized.append("{id}")
             else:
                 normalized.append(part)
-
         return "/".join(normalized)
+
+    def _get_endpoint(self, request: Request) -> str:
+        """Get endpoint path, normalizing path parameters."""
+        return self._normalize_path(request.url.path)
 
 
 # =============================================================================

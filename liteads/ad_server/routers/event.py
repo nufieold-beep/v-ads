@@ -44,18 +44,22 @@ _PIXEL_HEADERS = {
 }
 
 
+# Pre-built pixel response singleton (Starlette Response is safe to reuse)
+_PIXEL_RESPONSE = Response(
+    content=_PIXEL_GIF,
+    status_code=200,
+    media_type="image/gif",
+    headers=_PIXEL_HEADERS,
+)
+
+
 def _pixel_response() -> Response:
     """Return a 1x1 transparent GIF pixel.
 
     This is the standard response format for VAST tracking beacons.
     Video players and SSPs expect either this or HTTP 204.
     """
-    return Response(
-        content=_PIXEL_GIF,
-        status_code=200,
-        media_type="image/gif",
-        headers=_PIXEL_HEADERS,
-    )
+    return _PIXEL_RESPONSE
 
 
 def _parse_price(raw: str | None) -> float:
