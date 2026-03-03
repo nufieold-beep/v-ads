@@ -1014,8 +1014,9 @@ class TagBuilderRequest(BaseModel):
     height: int = Field(1080, description="Video player height")
     min_duration: int = Field(5, description="Minimum ad duration (s)")
     max_duration: int = Field(30, description="Maximum ad duration (s)")
-    app_bundle: str | None = Field(None, description="App bundle ID")
-    app_name: str | None = Field(None, description="App name")
+    app_bundle: str | None = Field(None, description="App bundle ID (required for CTV/InApp)")
+    app_name: str | None = Field(None, description="App name (required for CTV/InApp)")
+    app_store_url: str | None = Field(None, description="App store URL (required for CTV/InApp per Adtelligent)")
     coppa: int = Field(0, description="COPPA flag (0/1)")
     gdpr: int | None = Field(None, description="GDPR applies (0/1)")
     us_privacy: str | None = Field(None, description="US Privacy / CCPA string")
@@ -1023,7 +1024,7 @@ class TagBuilderRequest(BaseModel):
     # These will be replaced by the video player at runtime
     include_device_macros: bool = Field(
         True,
-        description="Include player-replaceable macros for IP, UA, IFA, DNT, etc.",
+        description="Include player-replaceable macros for UIP, UA, IFA, DNT, etc.",
     )
 
 
@@ -1066,6 +1067,8 @@ async def build_publisher_tag(body: TagBuilderRequest) -> TagBuilderResponse:
         params["app_bundle"] = body.app_bundle
     if body.app_name:
         params["app_name"] = body.app_name
+    if body.app_store_url:
+        params["app_store_url"] = body.app_store_url
     if body.gdpr is not None:
         params["gdpr"] = body.gdpr
     if body.us_privacy:
@@ -1076,8 +1079,9 @@ async def build_publisher_tag(body: TagBuilderRequest) -> TagBuilderResponse:
 
     macro_note = ""
     if body.include_device_macros:
-        # Standard macros that video players / SDKs replace at runtime
-        params["ip"] = "[IP]"
+        # Standard macros that video players / SDKs replace at runtime.
+        # Uses Adtelligent-standard `uip` for user IP (not legacy `ip`).
+        params["uip"] = "[UIP]"
         params["ua"] = "[UA]"
         params["ifa"] = "[IFA]"
         params["dnt"] = "[DNT]"
@@ -1085,7 +1089,7 @@ async def build_publisher_tag(body: TagBuilderRequest) -> TagBuilderResponse:
         params["device_make"] = "[MAKE]"
         params["device_model"] = "[MODEL]"
         macro_note = (
-            "Replace [IP], [UA], [IFA], [DNT], [OS], [MAKE], [MODEL], "
+            "Replace [UIP], [UA], [IFA], [DNT], [OS], [MAKE], [MODEL], "
             "and [CACHEBUSTER] with actual runtime values. "
             "Most SSAI / IMA SDK / PAL implementations handle this automatically."
         )
@@ -1094,7 +1098,7 @@ async def build_publisher_tag(body: TagBuilderRequest) -> TagBuilderResponse:
 
     # Example cURL (with macros resolved to sample values)
     sample = tag_url.replace("[CACHEBUSTER]", "123456789")
-    sample = sample.replace("[IP]", "203.0.113.42")
+    sample = sample.replace("[UIP]", "203.0.113.42")
     sample = sample.replace("[UA]", "Mozilla/5.0")
     sample = sample.replace("[IFA]", "00000000-0000-0000-0000-000000000000")
     sample = sample.replace("[DNT]", "0")
