@@ -637,6 +637,7 @@ class AnalyticsService:
         total_filled = 0
         result2 = await self.session.execute(select(Campaign.id))
         camp_ids = [r[0] for r in result2.all()]
+        camp_ids.append(0)  # Include system-level aggregate tracking (id 0)
 
         pipe = redis_client.pipeline()
         for cid in camp_ids:

@@ -443,20 +443,22 @@ class EventService:
 
     @staticmethod
     async def track_ad_request(campaign_ids: list[int] | None = None) -> None:
-        """Registers global incoming ad requests dynamically across campaigns."""
+        """Registers global incoming ad requests dynamically across campaigns & globals."""
         try:
             hour = current_hour()
             pipe = redis_client.pipeline()
             
+            # 1. ALWAYS increment the global request counter for the Dashboard
+            key_global = CacheKeys.stat_hourly(0, hour)
+            pipe.hincrby(key_global, "ad_requests", 1)
+            pipe.expire(key_global, _CACHE_TTL_STATS)
+            
+            # 2. Add individual campaign request counts
             if campaign_ids:
                 for cid in campaign_ids:
                     key = CacheKeys.stat_hourly(cid, hour)
                     pipe.hincrby(key, "ad_requests", 1)
                     pipe.expire(key, _CACHE_TTL_STATS)
-            else:
-                key = CacheKeys.stat_hourly(0, hour)
-                pipe.hincrby(key, "ad_requests", 1)
-                pipe.expire(key, _CACHE_TTL_STATS)
                 
             await pipe.execute()
         except Exception as e:
@@ -471,6 +473,11 @@ class EventService:
         try:
             hour = current_hour()
             pipe = redis_client.pipeline()
+            
+            # 1. ALWAYS increment the global opportunity counter
+            key_global = CacheKeys.stat_hourly(0, hour)
+            pipe.hincrby(key_global, "ad_opportunities", 1)
+            pipe.expire(key_global, _CACHE_TTL_STATS)
             
             for cid in campaign_ids:
                 key = CacheKeys.stat_hourly(cid, hour)
