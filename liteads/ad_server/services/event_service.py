@@ -15,6 +15,7 @@ from typing import Any
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 import redis.asyncio as redis
+from redis.exceptions import RedisError
 
 from liteads.common.cache import CacheKeys, redis_client
 from liteads.common.logger import get_logger
@@ -83,6 +84,9 @@ _STAT_FIELD_MAP: dict[int, str] = {
     EventType.COMPLETE: "completions",
     EventType.CLICK: "clicks",
     EventType.SKIP: "skips",
+    EventType.WIN: "wins",
+    EventType.LOSS: "losses",
+    EventType.ERROR: "errors",
 }
 
 
@@ -104,7 +108,7 @@ class EventService:
         user_id: str | None = None,
         timestamp: int | None = None,
         environment: str | None = None,
-        video_position: Any | None = None,  # Accepts Any explicitly for sanitization
+        video_position: Any | None = None,
         extra: dict[str, Any] | None = None,
         ip_address: str | None = None,
         win_price: float = 0.0,
@@ -114,69 +118,80 @@ class EventService:
         country_code: str | None = None,
     ) -> bool:
         """
-        Main entry point for tracking an ad event. 
-        Sanitizes input, prevents duplication, handles analytics calculations
-        in Postgres, pushes updates to Redis, and reports to Prometheus.
+        Main entry point for tracking an ad event.
+        Guarantees that database persistence will not fail if Redis services drop.
         """
         try:
             # 1. Parsing & Sanitization
             campaign_id, creative_id = self._parse_ad_id(ad_id)
             event_type_enum = self._get_event_type(event_type)
+            
             if event_type_enum is None:
                 logger.warning(f"Unknown video event type ignored: {event_type}")
                 return False
 
             env_int = ENV_TO_INT.get(environment) if environment else None
             safe_video_position = self._sanitize_video_position(video_position)
+            
+            # Format win price accurately for DB representation
+            safe_win_price = Decimal(str(round(win_price, 6))) if win_price else _DECIMAL_ZERO
+            event_time = datetime.fromtimestamp(timestamp, tz=timezone.utc) if timestamp else datetime.now(timezone.utc)
 
-            # 2. Impression Deduplication
+            # 2. Impression Deduplication (Safely falls back if Redis fails)
             is_dedup = await self._is_duplicate_impression(
                 request_id, campaign_id, event_type_enum
             )
 
-            # 3. Analytics Accounting (Cost)
+            # 3. Analytics Accounting (Cost) - Uses DB or Redis Safely
             cost = await self._calculate_event_cost(
                 event_type_enum, campaign_id, win_price, is_dedup
             )
             
-            # Format win price accurately for DB representation
-            safe_win_price = Decimal(str(round(win_price, 6))) if win_price else Decimal("0")
-            event_time = datetime.fromtimestamp(timestamp, tz=timezone.utc) if timestamp else datetime.now(timezone.utc)
-
             # 4. PostgreSQL Database Persistence
-            await self._persist_event_to_db(
-                request_id=request_id,
-                campaign_id=campaign_id,
-                creative_id=creative_id,
-                event_type=event_type_enum,
-                event_time=event_time,
-                user_id=user_id,
-                ip_address=ip_address,
-                cost=cost,
-                win_price=safe_win_price,
-                adomain=adomain,
-                source_name=source_name,
-                bundle_id=bundle_id,
-                country_code=country_code,
-                video_position=safe_video_position,
-                environment=env_int,
-            )
+            try:
+                await self._persist_event_to_db(
+                    request_id=request_id,
+                    campaign_id=campaign_id,
+                    creative_id=creative_id,
+                    event_type=event_type_enum,
+                    event_time=event_time,
+                    user_id=user_id,
+                    ip_address=ip_address,
+                    cost=cost,
+                    win_price=safe_win_price,
+                    adomain=adomain,
+                    source_name=source_name,
+                    bundle_id=bundle_id,
+                    country_code=country_code,
+                    video_position=safe_video_position,
+                    environment=env_int,
+                )
+            except Exception as db_err:
+                # Strictly isolate DB rollback so it does not destroy healthy Redis states if reversed
+                logger.error(f"Failed to persist video event to database: {db_err}", exc_info=True)
+                await self.session.rollback()
+                return False
 
-            # Re-verify deduplication to decide if we should update statistical caches
-            # We persist duplicates for auditing, but don't count them for metrics/billing
+            # We persist duplicates for auditing, but skip dashboard counters/billing modifications
             if is_dedup:
                 return True
 
             # 5. Redis Dashboard Analytics & Spend Pipelining
-            await self._update_redis_analytics_pipeline(
-                campaign_id=campaign_id,
-                event_type_enum=event_type_enum,
-                user_id=user_id,
-                cost=cost,
-                win_price=win_price,
-            )
-
-            # 6. Prometheus Export
+            try:
+                await self._update_redis_analytics_pipeline(
+                    campaign_id=campaign_id,
+                    event_type_enum=event_type_enum,
+                    user_id=user_id,
+                    cost=cost,
+                    win_price=win_price,
+                )
+            except Exception as redis_err:
+                # If Redis analytics fail, we catch so it does not trigger the HTTP dependency 
+                # to rollback the database transaction (which just succeeded).
+                logger.error(f"Redis pipeline update failed for event: {redis_err}")
+                # We do not rollback DB here! 
+                
+            # 6. Prometheus Export (In-memory UDP, non-blocking)
             self._update_prometheus_metrics(campaign_id, event_type_enum, extra)
 
             logger.debug(
@@ -188,22 +203,17 @@ class EventService:
             return True
 
         except Exception as e:
-            logger.error(f"Failed to track video event safely: {e}", exc_info=True)
-            # Ensure DB rollback safely prevents lifecycle poisoning
-            try:
-                await self.session.rollback()
-            except Exception:
-                pass
+            logger.error(f"Critical failure globally processing event {event_type}: {e}", exc_info=True)
             return False
 
     # ──────────────────────────────────────────────────────────────────
-    # Helper Sub-Methods for `track_event`
+    # Helper Sub-Methods
     # ──────────────────────────────────────────────────────────────────
 
     def _sanitize_video_position(self, video_position: Any) -> int | None:
         """
         Safety converter: ensures video_position is castable to integer.
-        Mitigates fatal crash when tracking VAST macros inject string values like 'ctv'.
+        Mitigates crash when VAST macros inject string values like 'ctv'.
         """
         if video_position is None:
             return None
@@ -221,14 +231,13 @@ class EventService:
             return None, None
 
         parts = ad_id.split("_")
-        
         try:
             if len(parts) >= 3:
                 # Format: ad_{campaign_id}_{creative_id}
                 cid = self._safe_int(parts[1])
                 crid = self._safe_int(parts[2])
                 
-                # Rule: DSP fills often use campaign `0`. Local DB enforces FK on real creatives.
+                # DSP fills natively bypass internal DB creatives, cid is usually 0
                 if cid == 0:
                     crid = None
                     
@@ -245,11 +254,11 @@ class EventService:
                 return (cid, None) if cid is not None else (0, None)
                 
         except Exception as e:
-            logger.warning(f"Failed to parse ad_id format: {ad_id} | error: {e}")
+            logger.warning(f"Failed to cleanly parse ad_id '{ad_id}': {e}")
             return None, None
 
     def _safe_int(self, value: Any) -> int | None:
-        """Convert arbitrary input to integer, silencing standard exceptions."""
+        """Convert arbitrary input to integer safely."""
         try:
             return int(value)
         except (ValueError, TypeError):
@@ -265,20 +274,24 @@ class EventService:
         self, request_id: str, campaign_id: int | None, event_type_enum: int
     ) -> bool:
         """
-        Prevents double-billing/analytics counting for when the BURL pixel 
-        AND VAST tracker pixel naturally hit simultaneously for one request_id.
+        Prevents double-billing for when BURL and IMP pixels naturally hit identically.
+        Falls back to 'False' safely if Redis connection drops.
         """
         if event_type_enum != EventType.IMPRESSION or campaign_id is None:
             return False
 
-        dedup_key = f"imp_dedup:{request_id}:{campaign_id}"
-        is_new = await redis_client.set(dedup_key, "1", ttl=_CACHE_TTL_DEDUP, nx=True)
-        
-        # is_new = True indicates fresh key creation.
-        # is_new = False indicates it just collided
-        if not is_new:
-            logger.info("Duplicate impression suppressed", request_id=request_id, campaign_id=campaign_id)
-            return True
+        try:
+            dedup_key = f"imp_dedup:{request_id}:{campaign_id}"
+            is_new = await redis_client.set(dedup_key, "1", ttl=_CACHE_TTL_DEDUP, nx=True)
+            
+            # is_new = True indicates fresh key creation.
+            # is_new = False indicates it just collided
+            if not is_new:
+                logger.info("Duplicate impression suppressed", request_id=request_id, campaign_id=campaign_id)
+                return True
+        except Exception as e:
+            logger.warning(f"Dedup check bypassed due to Redis unreachability: {e}")
+
         return False
 
     async def _calculate_event_cost(
@@ -288,44 +301,51 @@ class EventService:
         win_price: float, 
         is_dedup: bool
     ) -> Decimal:
-        """Derive the precise Decimal CPM cost to charge if this is an actionable impression."""
+        """Calculate the precise strict Decimal CPM cost if actionable."""
         if is_dedup or event_type_enum != EventType.IMPRESSION or campaign_id is None:
             return _DECIMAL_ZERO
             
         if campaign_id > 0:
-            # First-party local campaign - lookup fixed CPM bid from db/cache
+            # Local campaign -> database reference
             return await self._calculate_cpm_cost(campaign_id)
         elif win_price > 0:
-            # Third-party demand fill - calculate immediate cost from dynamic macro
+            # Third-party programmatic fill -> dynamic price
             return Decimal(str(win_price)) / _DECIMAL_1000
             
         return _DECIMAL_ZERO
 
     async def _calculate_cpm_cost(self, campaign_id: int) -> Decimal:
-        """Fetch local campaign DB bid amounts specifically cached into Redis."""
+        """Fetch local campaign DB bid amounts specifically cached into Redis safely."""
+        cache_key = f"campaign:cpm:{campaign_id}"
+        
         try:
-            cache_key = f"campaign:cpm:{campaign_id}"
             cached_cpm = await redis_client.get(cache_key)
             if cached_cpm:
-                return Decimal(cached_cpm.decode('utf-8') if isinstance(cached_cpm, bytes) else str(cached_cpm)) / _DECIMAL_1000
+                val_str = cached_cpm.decode('utf-8') if isinstance(cached_cpm, bytes) else str(cached_cpm)
+                return Decimal(val_str) / _DECIMAL_1000
+        except Exception as e:
+            logger.warning(f"Redis campaign bid read failed: {e}")
 
-            # Fall back to DB resolving single record scalar
+        # Fall back to PostgreSQL DB resolving single record scalar
+        try:
             result = await self.session.execute(
                 select(Campaign.bid_amount).where(Campaign.id == campaign_id)
             )
             bid_amount = result.scalar()
             
             if bid_amount is not None:
-                await redis_client.set(cache_key, str(bid_amount), ttl=300)
+                try:
+                    await redis_client.set(cache_key, str(bid_amount), ttl=300)
+                except Exception:
+                    pass # Ignore redis cache set failure 
                 return Decimal(str(bid_amount)) / _DECIMAL_1000
-
-            return _DECIMAL_ZERO
         except Exception as e:
-            logger.warning(f"Failed to calculate CPM cost for campaign {campaign_id}: {e}")
-            return _DECIMAL_ZERO
+            logger.error(f"Postgres execution failed extracting campaign bid: {e}")
+
+        return _DECIMAL_ZERO
 
     async def _persist_event_to_db(self, **kwargs: Any) -> None:
-        """Constructs and injects an `AdEvent` payload precisely into the tracking database."""
+        """Injects `AdEvent` dynamically mapped to Postgres layer."""
         event = AdEvent(**kwargs)
         self.session.add(event)
         await self.session.flush()
@@ -339,31 +359,33 @@ class EventService:
         win_price: float
     ) -> None:
         """
-        Generates robust bulk updates for all Dashboard aggregation settings in one operation block.
-        Ensuring absolute consistency in the redis counters for active queries.
+        Executes robust clustered hash updates dynamically powering the Analytics Dashboard.
+        Called within exception handling wrappers implicitly.
         """
         hour = current_hour()
         stat_key = CacheKeys.stat_hourly(campaign_id, hour) if campaign_id is not None else None
         
-        # We start one network pipeline connection
         pipe = redis_client.pipeline()
 
         # 1. Update Core Statistical Dashboard Counters Map
         if stat_key:
-            field_name = _STAT_FIELD_MAP.get(
-                EventType(event_type_enum) if event_type_enum in EventType else event_type_enum  # type: ignore[arg-type]
-            )
+            _enum_val = EventType(event_type_enum) if event_type_enum in EventType else event_type_enum  # type: ignore[arg-type]
+            field_name = _STAT_FIELD_MAP.get(_enum_val)
+            
             if field_name:
                 pipe.hincrby(stat_key, field_name, 1)
                 
-            # If win event recorded via tracker
+            # Extra WIN context mapping
             if event_type_enum == EventType.WIN and win_price > 0:
-                pipe.hincrby(stat_key, "wins", 1)
-                pipe.hincrbyfloat(stat_key, "win_price_sum", win_price)
+                # Add check if it doesn't double run "wins" if it was already caught in field_name
+                # (EventType.WIN is already 'wins' in map, avoid duplicate injection)
+                if field_name != "wins":
+                    pipe.hincrby(stat_key, "wins", 1)
+                pipe.hincrbyfloat(stat_key, "win_price_sum", float(win_price))
                 
             pipe.expire(stat_key, _CACHE_TTL_STATS)
 
-        # 2. Append Cost Accruals (Spend)
+        # 2. Append Cost Accruals (Spend ledger logic)
         if event_type_enum == EventType.IMPRESSION and campaign_id is not None and cost > 0:
             today = current_date()
             budget_key = f"budget:{campaign_id}:{today}"
@@ -375,21 +397,21 @@ class EventService:
             if stat_key:
                 pipe.hincrbyfloat(stat_key, "spend", float(cost))
 
-        # 3. Manage Pacing Logs (Frequency Control Cap Management)
+        # 3. Manage Pacing Logs (Frequency Caps)
         if event_type_enum == EventType.IMPRESSION and user_id and campaign_id is not None:
             today = current_date()
             daily_key = CacheKeys.freq_daily(user_id, campaign_id, today)
             hourly_key = CacheKeys.freq_hourly(user_id, campaign_id, hour)
             
             pipe.incr(daily_key)
-            pipe.expire(daily_key, 86400)    # 24H TTL
+            pipe.expire(daily_key, 86400)    
             pipe.incr(hourly_key)
-            pipe.expire(hourly_key, 3600)    # 1H TTL
+            pipe.expire(hourly_key, 3600)    
 
         await pipe.execute()
 
     def _update_prometheus_metrics(self, campaign_id: int | None, event_type_enum: int, extra: dict[str, Any] | None) -> None:
-        """Gracefully emit telemetry tracking instances out into the independent health metric infrastructure."""
+        """Gracefully emit telemetry to the independent metrics infrastructure layer."""
         cid_str = str(campaign_id) if campaign_id is not None else "unknown"
         
         try:
@@ -413,49 +435,48 @@ class EventService:
             elif event_type_enum == EventType.SKIP:
                 record_ad_skip(cid_str)
         except Exception:
-            # Metrics exceptions must strictly never halt or interrup application routing
             pass  
 
     # ──────────────────────────────────────────────────────────────────
-    # Request Routing Trackers
+    # Request & Opportunity Trackers
     # ──────────────────────────────────────────────────────────────────
 
     @staticmethod
     async def track_ad_request(campaign_ids: list[int] | None = None) -> None:
-        """
-        Registers incoming network bid request entries inside dashboard cache pipeline.
-        Tracks globals vs selected eligible campaigns incrementally without breaking pipeline execution.
-        """
-        hour = current_hour()
-        pipe = redis_client.pipeline()
-        
-        if campaign_ids:
-            for cid in campaign_ids:
-                key = CacheKeys.stat_hourly(cid, hour)
+        """Registers global incoming ad requests dynamically across campaigns."""
+        try:
+            hour = current_hour()
+            pipe = redis_client.pipeline()
+            
+            if campaign_ids:
+                for cid in campaign_ids:
+                    key = CacheKeys.stat_hourly(cid, hour)
+                    pipe.hincrby(key, "ad_requests", 1)
+                    pipe.expire(key, _CACHE_TTL_STATS)
+            else:
+                key = CacheKeys.stat_hourly(0, hour)
                 pipe.hincrby(key, "ad_requests", 1)
                 pipe.expire(key, _CACHE_TTL_STATS)
-        else:
-            key = CacheKeys.stat_hourly(0, hour)
-            pipe.hincrby(key, "ad_requests", 1)
-            pipe.expire(key, _CACHE_TTL_STATS)
-            
-        await pipe.execute()
+                
+            await pipe.execute()
+        except Exception as e:
+            logger.warning(f"Failed to track ad requests dynamically in Cache: {e}")
 
     @staticmethod
     async def track_ad_opportunity(campaign_ids: list[int]) -> None:
-        """
-        Bumps the opportunity cache layer metrics defining candidates returned downstream.
-        Critical function representing healthy routing fill thresholds per candidate.
-        """
+        """Bump opportunity metrics defining downstream rendering health."""
         if not campaign_ids:
             return
             
-        hour = current_hour()
-        pipe = redis_client.pipeline()
-        
-        for cid in campaign_ids:
-            key = CacheKeys.stat_hourly(cid, hour)
-            pipe.hincrby(key, "ad_opportunities", 1)
-            pipe.expire(key, _CACHE_TTL_STATS)
+        try:
+            hour = current_hour()
+            pipe = redis_client.pipeline()
             
-        await pipe.execute()
+            for cid in campaign_ids:
+                key = CacheKeys.stat_hourly(cid, hour)
+                pipe.hincrby(key, "ad_opportunities", 1)
+                pipe.expire(key, _CACHE_TTL_STATS)
+                
+            await pipe.execute()
+        except Exception as e:
+            logger.warning(f"Failed to cleanly track ad opportunities in cache: {e}")
