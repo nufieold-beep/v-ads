@@ -1088,7 +1088,7 @@ async def integration_endpoints(
     base = base_url.rstrip("/")
 
     return IntegrationEndpointsOut(
-        vast_tag_url=f"{base}/api/vast?sid={{SLOT_ID}}&w=1920&h=1080&max_dur=30&ip={{IP}}&ua={{UA}}&ifa={{IFA}}&os={{OS}}&cb={{CACHEBUSTER}}",
+        vast_tag_url=f"{base}/api/vast?sid={{SLOT_ID}}&w=1920&h=1080&max_dur=30&uip={{UIP}}&ua={{UA}}&ifa={{IFA}}&os={{OS}}&app_name={{APP_NAME}}&app_bundle={{APP_BUNDLE}}&app_store_url={{APP_STORE_URL}}&cb={{CACHEBUSTER}}",
         vast_tag_builder=f"{base}/api/vast/tag-builder",
         openrtb_bid=f"{base}/api/v1/openrtb/bid",
         event_tracking=f"{base}/api/v1/event/track?type={{EVENT}}&req={{REQUEST_ID}}&ad={{AD_ID}}",

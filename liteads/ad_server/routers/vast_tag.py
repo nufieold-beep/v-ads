@@ -196,6 +196,7 @@ async def vast_tag(
     startdelay: Optional[int] = Query(None, description="Start delay (0=pre, >0=mid, -1=mid, -2=post)"),
     # Device
     ip: Optional[str] = Query(None, description="Client IP address"),
+    uip: Optional[str] = Query(None, description="User IP address (Adtelligent-compatible alias for ip)"),
     ua: Optional[str] = Query(None, description="User-Agent"),
     ifa: Optional[str] = Query(None, description="Advertising ID"),
     dnt: Optional[int] = Query(None, description="Do Not Track flag"),
@@ -293,6 +294,9 @@ async def vast_tag(
     """
     request_id = generate_request_id()
     settings = get_settings()
+
+    # ── Resolve user IP: prefer `uip` (Adtelligent-compatible) over `ip` ──
+    ip = uip or ip
 
     # ── Normalise dnt / coppa (may arrive as None from middleware) ─
     dnt = dnt if dnt is not None else 0

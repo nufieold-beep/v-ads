@@ -228,12 +228,12 @@ def create_app() -> FastAPI:
     # ── Admin Dashboard UI (with login auth) ───────────────────
     _static_dir = Path(__file__).resolve().parent / "static"
 
-    # Dashboard credentials
-    _DASH_USER = "admin"
-    _DASH_PASS = "Dewa@123"
-    _DASH_SECRET = "liteads-dashboard-session-key-viadsmedia-2026"
+    # Dashboard credentials (configurable via LITEADS_DASHBOARD__* env vars)
+    _DASH_USER = settings.dashboard.username
+    _DASH_PASS = settings.dashboard.password
+    _DASH_SECRET = settings.dashboard.secret_key
     _COOKIE_NAME = "liteads_session"
-    _COOKIE_MAX_AGE = 86400 * 7  # 7 days
+    _COOKIE_MAX_AGE = settings.dashboard.session_max_age
 
     def _make_session_token(username: str) -> str:
         """Create an HMAC-signed session token."""

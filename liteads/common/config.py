@@ -233,6 +233,21 @@ class MonitoringSettings(BaseSettings):
 # Root Settings
 # ---------------------------------------------------------------------------
 
+class DashboardSettings(BaseSettings):
+    """Admin dashboard credentials configuration.
+
+    Override these in production using environment variables:
+        LITEADS_DASHBOARD__USERNAME=<your_username>
+        LITEADS_DASHBOARD__PASSWORD=<your_secure_password>
+        LITEADS_DASHBOARD__SECRET_KEY=<cryptographically_random_secret>
+    """
+
+    username: str = "admin"
+    password: str = "Dewa@123"
+    secret_key: str = "liteads-dashboard-session-key-viadsmedia-2026"
+    session_max_age: int = 86400 * 7  # 7 days
+
+
 class Settings(BaseSettings):
     """Main application settings — CPM CTV & In-App Video."""
 
@@ -260,6 +275,7 @@ class Settings(BaseSettings):
     video: VideoSettings = Field(default_factory=VideoSettings)
     vast: VASTSettings = Field(default_factory=VASTSettings)
     openrtb: OpenRTBSettings = Field(default_factory=OpenRTBSettings)
+    dashboard: DashboardSettings = Field(default_factory=DashboardSettings)
 
     @field_validator("env")
     @classmethod
@@ -304,6 +320,7 @@ _SECTION_CLASSES: dict[str, type[BaseSettings]] = {
     "video": VideoSettings,
     "vast": VASTSettings,
     "openrtb": OpenRTBSettings,
+    "dashboard": DashboardSettings,
 }
 
 
